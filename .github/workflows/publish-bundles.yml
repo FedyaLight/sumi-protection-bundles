@@ -1,0 +1,86 @@
+name: Publish Prepared Bundles
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-prepared-bundles
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build, validate, and publish bundles
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show tool versions
+        run: |
+          python3 --version
+          cargo --version
+          gh --version
+
+      - name: Run generator self-tests
+        run: |
+          python3 scripts/test_sumi_adblock_bundle.py
+          python3 scripts/prepare_release_payload.py self-test
+
+      - name: Build prepared bundles
+        run: |
+          scripts/build_sumi_adblock_bundle.sh \
+            --all-profiles \
+            --refresh \
+            --output .build/sumi-adblock-bundles
+
+      - name: Verify prepared bundles
+        run: |
+          for bundle in .build/sumi-adblock-bundles/*/SumiAdblockBundle; do
+            scripts/verify_sumi_adblock_bundle.sh "$bundle"
+          done
+
+      - name: Prepare release payload
+        run: |
+          python3 scripts/prepare_release_payload.py prepare \
+            --bundles-root .build/sumi-adblock-bundles \
+            --output dist \
+            --repository-owner "${GITHUB_REPOSITORY_OWNER}" \
+            --repository-name "${GITHUB_REPOSITORY#*/}"
+
+      - name: Validate release payload
+        run: |
+          python3 scripts/prepare_release_payload.py validate \
+            --release-assets dist/release-assets
+
+      - name: Upload CI inspection artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sumi-protection-bundles
+          path: |
+            .build/sumi-adblock-bundles
+            dist
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(cat dist/release-version.txt)"
+          TAG="bundles-${VERSION}"
+          TITLE="Sumi protection bundles ${VERSION}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" dist/release-assets/* --clobber
+            gh release edit "${TAG}" --title "${TITLE}" --notes-file dist/release-notes.md
+          else
+            gh release create "${TAG}" dist/release-assets/* \
+              --title "${TITLE}" \
+              --notes-file dist/release-notes.md
+          fi

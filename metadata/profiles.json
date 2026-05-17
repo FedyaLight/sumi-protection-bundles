@@ -1,0 +1,12 @@
+{
+  "adguardAdsPrivacy": {
+    "classification": "Sumi prepared Adblock",
+    "displayName": "AdGuard ads and privacy",
+    "listIds": [
+      "adguard-base",
+      "adguard-mobile-ads",
+      "adguard-tracking-protection",
+      "adguard-url-tracking"
+    ]
+  }
+}

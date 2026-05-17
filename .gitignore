@@ -1,0 +1,6 @@
+.DS_Store
+.build/
+dist/
+Vendor/Brave/AdblockRustAdapter/target/
+*.pyc
+__pycache__/

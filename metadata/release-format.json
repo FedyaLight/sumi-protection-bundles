@@ -1,0 +1,11 @@
+{
+  "bundleManifestSchemaVersion": 1,
+  "maximumSumiBundleExpectationVersion": 1,
+  "minimumSumiBundleExpectationVersion": 1,
+  "releaseManifestAssetName": "sumi-protection-bundles-release.json",
+  "releaseManifestSchemaVersion": 1,
+  "requiredNativeCSSSafetyPolicyVersion": "sumi-native-css-safety/0.4",
+  "supportedProfiles": [
+    "adguardAdsPrivacy"
+  ]
+}

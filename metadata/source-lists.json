@@ -1,0 +1,22 @@
+{
+  "adguard-base": {
+    "category": "baseAds",
+    "displayName": "AdGuard Base",
+    "url": "https://filters.adtidy.org/extension/chromium/filters/2.txt"
+  },
+  "adguard-mobile-ads": {
+    "category": "baseAds",
+    "displayName": "AdGuard Mobile Ads",
+    "url": "https://filters.adtidy.org/extension/chromium/filters/11.txt"
+  },
+  "adguard-tracking-protection": {
+    "category": "privacyOverlap",
+    "displayName": "AdGuard Tracking Protection",
+    "url": "https://filters.adtidy.org/extension/chromium/filters/3.txt"
+  },
+  "adguard-url-tracking": {
+    "category": "privacyOverlap",
+    "displayName": "AdGuard URL Tracking",
+    "url": "https://filters.adtidy.org/windows/filters/17.txt"
+  }
+}
