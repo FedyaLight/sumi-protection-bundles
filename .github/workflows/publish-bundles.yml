@@ -129,11 +129,12 @@ jobs:
           VERSION="$(cat dist/release-version.txt)"
           TAG="bundles-${VERSION}"
           TITLE="Sumi protection bundles ${VERSION}"
-          if gh release view "${TAG}" >/dev/null 2>&1; then
-            gh release upload "${TAG}" dist/release-assets/* --clobber
-            gh release edit "${TAG}" --title "${TITLE}" --notes-file dist/release-notes.md
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" dist/release-assets/* --clobber --repo "${GITHUB_REPOSITORY}"
+            gh release edit "${TAG}" --title "${TITLE}" --notes-file dist/release-notes.md --repo "${GITHUB_REPOSITORY}"
           else
             gh release create "${TAG}" dist/release-assets/* \
+              --repo "${GITHUB_REPOSITORY}" \
               --title "${TITLE}" \
               --notes-file dist/release-notes.md
           fi
