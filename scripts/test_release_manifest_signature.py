@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SIGN = ROOT / "scripts" / "sign_release_manifest.py"
 VERIFY = ROOT / "scripts" / "verify_release_manifest_signature.py"
 KEY_ID = "sumi-protection-bundles-ed25519-v1"
+OPENSSL = os.environ.get("OPENSSL", "openssl")
 
 
 class ReleaseManifestSignatureTests(unittest.TestCase):
@@ -127,13 +128,13 @@ class ReleaseManifestSignatureTests(unittest.TestCase):
         private_key = directory / f"ed25519-{len(list(directory.iterdir()))}.pem"
         public_key = directory / f"ed25519-{len(list(directory.iterdir()))}.pub.pem"
         subprocess.run(
-            ["openssl", "genpkey", "-algorithm", "Ed25519", "-out", str(private_key)],
+            [OPENSSL, "genpkey", "-algorithm", "Ed25519", "-out", str(private_key)],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
         subprocess.run(
-            ["openssl", "pkey", "-in", str(private_key), "-pubout", "-out", str(public_key)],
+            [OPENSSL, "pkey", "-in", str(private_key), "-pubout", "-out", str(public_key)],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

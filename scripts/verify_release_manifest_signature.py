@@ -5,6 +5,7 @@ import argparse
 import base64
 import json
 import os
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -17,6 +18,13 @@ DEFAULT_PRIVATE_KEY_ENV = "SUMI_PROTECTION_BUNDLE_ED25519_PRIVATE_KEY"
 DEFAULT_SIGNATURE_SCHEMA_VERSION = 1
 DEFAULT_ALGORITHM = "Ed25519"
 DEFAULT_SIGNED_ASSET = "sumi-protection-bundles-release.json"
+
+
+def openssl_command() -> str:
+    configured = os.environ.get("OPENSSL")
+    if configured:
+        return configured
+    return shutil.which("openssl") or "openssl"
 
 
 def normalize_pem(value: str, label: str) -> str:
@@ -38,7 +46,7 @@ def pem_from_environment(name: str, label: str) -> str | None:
 
 def run_openssl(args: list[str]) -> bytes:
     completed = subprocess.run(
-        ["openssl", *args],
+        [openssl_command(), *args],
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

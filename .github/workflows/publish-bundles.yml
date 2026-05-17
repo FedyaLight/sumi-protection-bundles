@@ -25,11 +25,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Select OpenSSL 3
+        run: |
+          OPENSSL_BIN="$(brew --prefix openssl@3 2>/dev/null)/bin/openssl"
+          if [ ! -x "${OPENSSL_BIN}" ]; then
+            OPENSSL_BIN="$(command -v openssl)"
+          fi
+          echo "OPENSSL=${OPENSSL_BIN}" >> "${GITHUB_ENV}"
+          "${OPENSSL_BIN}" version
+
       - name: Show tool versions
         run: |
           python3 --version
           cargo --version
           gh --version
+          "${OPENSSL}" version
 
       - name: Run generator self-tests
         run: |
