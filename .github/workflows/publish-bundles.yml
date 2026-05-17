@@ -6,19 +6,22 @@ on:
     - cron: "17 3 * * 1"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: publish-prepared-bundles
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Build, validate, and publish bundles
+  build:
+    name: Build, validate, and sign bundles
     runs-on: macos-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
 
     steps:
+      # GitHub-maintained first-party actions are version-tagged for now; this workflow does not use third-party actions.
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -32,6 +35,7 @@ jobs:
         run: |
           python3 scripts/test_sumi_adblock_bundle.py
           python3 scripts/prepare_release_payload.py self-test
+          python3 scripts/test_release_manifest_signature.py
 
       - name: Build prepared bundles
         run: |
@@ -59,6 +63,30 @@ jobs:
           python3 scripts/prepare_release_payload.py validate \
             --release-assets dist/release-assets
 
+      - name: Sign release manifest
+        env:
+          SUMI_PROTECTION_BUNDLE_ED25519_PRIVATE_KEY: ${{ secrets.SUMI_PROTECTION_BUNDLE_ED25519_PRIVATE_KEY }}
+        run: |
+          python3 scripts/sign_release_manifest.py \
+            --manifest dist/release-assets/sumi-protection-bundles-release.json \
+            --signature dist/release-assets/sumi-protection-bundles-release.json.sig \
+            --key-id sumi-protection-bundles-ed25519-v1
+
+      - name: Verify release manifest signature
+        env:
+          SUMI_PROTECTION_BUNDLE_ED25519_PRIVATE_KEY: ${{ secrets.SUMI_PROTECTION_BUNDLE_ED25519_PRIVATE_KEY }}
+        run: |
+          python3 scripts/verify_release_manifest_signature.py \
+            --manifest dist/release-assets/sumi-protection-bundles-release.json \
+            --signature dist/release-assets/sumi-protection-bundles-release.json.sig \
+            --expected-key-id sumi-protection-bundles-ed25519-v1
+          python3 scripts/prepare_release_payload.py refresh-checksums \
+            --release-assets dist/release-assets
+          python3 scripts/verify_release_manifest_signature.py \
+            --manifest dist/release-assets/sumi-protection-bundles-release.json \
+            --signature dist/release-assets/sumi-protection-bundles-release.json.sig \
+            --expected-key-id sumi-protection-bundles-ed25519-v1
+
       - name: Upload CI inspection artifact
         uses: actions/upload-artifact@v7
         with:
@@ -68,6 +96,21 @@ jobs:
             dist
           if-no-files-found: error
           retention-days: 30
+
+  publish:
+    name: Publish signed GitHub Release
+    runs-on: macos-latest
+    needs: build
+    timeout-minutes: 20
+    permissions:
+      contents: write
+
+    steps:
+      # GitHub-maintained first-party actions are version-tagged for now; this workflow does not use third-party actions.
+      - name: Download signed release payload
+        uses: actions/download-artifact@v7
+        with:
+          name: sumi-protection-bundles
 
       - name: Publish GitHub Release
         env:

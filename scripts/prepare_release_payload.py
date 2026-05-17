@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import shutil
+import tempfile
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Any
 
 RELEASE_MANIFEST_SCHEMA_VERSION = 1
 RELEASE_MANIFEST_ASSET_NAME = "sumi-protection-bundles-release.json"
+RELEASE_MANIFEST_SIGNATURE_ASSET_NAME = "sumi-protection-bundles-release.json.sig"
 CHECKSUMS_ASSET_NAME = "sumi-protection-bundles-checksums.txt"
 MINIMUM_SUMI_BUNDLE_EXPECTATION_VERSION = 1
 MAXIMUM_SUMI_BUNDLE_EXPECTATION_VERSION = 1
@@ -33,6 +35,17 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def write_checksums(release_assets_dir: Path) -> None:
+    checksum_lines = []
+    for path in sorted(release_assets_dir.iterdir()):
+        if path.is_file() and path.name != CHECKSUMS_ASSET_NAME:
+            checksum_lines.append(f"{sha256_hex(path.read_bytes())}  {path.name}")
+    (release_assets_dir / CHECKSUMS_ASSET_NAME).write_text(
+        "\n".join(checksum_lines) + "\n",
+        encoding="utf-8",
+    )
 
 
 def validate_bundle(bundle_dir: Path) -> dict[str, Any]:
@@ -187,11 +200,7 @@ def prepare(args: argparse.Namespace) -> None:
     }
     write_json(release_assets_dir / RELEASE_MANIFEST_ASSET_NAME, release_manifest)
 
-    checksum_lines = []
-    for path in sorted(release_assets_dir.iterdir()):
-        if path.is_file():
-            checksum_lines.append(f"{sha256_hex(path.read_bytes())}  {path.name}")
-    (release_assets_dir / CHECKSUMS_ASSET_NAME).write_text("\n".join(checksum_lines) + "\n", encoding="utf-8")
+    write_checksums(release_assets_dir)
 
     notes = [
         f"# Sumi protection bundles {version}",
@@ -205,7 +214,9 @@ def prepare(args: argparse.Namespace) -> None:
             f"- `{bundle['profileId']}`: generation `{bundle['generationId']}`, bundle `{bundle['bundleId']}`"
         )
     notes.append("")
-    notes.append("Sumi consumes `sumi-protection-bundles-release.json` and verifies every listed asset by SHA-256 before caching or activating it.")
+    notes.append(
+        "Sumi verifies `sumi-protection-bundles-release.json.sig` against pinned Ed25519 public keys before trusting the release manifest, then verifies every listed asset by SHA-256 before caching or activating it."
+    )
     (output_dir / "release-notes.md").write_text("\n".join(notes) + "\n", encoding="utf-8")
     (output_dir / "release-version.txt").write_text(version + "\n", encoding="utf-8")
     print(version)
@@ -239,11 +250,28 @@ def validate(args: argparse.Namespace) -> None:
     print(f"validated {len(manifest.get('assets', []))} release payload assets")
 
 
+def refresh_checksums(args: argparse.Namespace) -> None:
+    release_assets_dir = Path(args.release_assets).resolve()
+    if not release_assets_dir.exists():
+        raise SystemExit(f"Missing release assets directory: {release_assets_dir}")
+    write_checksums(release_assets_dir)
+    print(f"refreshed checksums in {release_assets_dir}")
+
+
 def self_test() -> None:
     sample = b"[]"
     assert sha256_hex(sample) == "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
     assert flattened_asset_name("adguardAdsPrivacy", "network/network-0001.json") == "adguardAdsPrivacy-network-0001.json"
     assert asset_role("nativeCSS/nativeCSS-0001.json", "nativeCSS") == "nativeCSSShard"
+    with tempfile.TemporaryDirectory() as tmp:
+        release_assets = Path(tmp)
+        (release_assets / RELEASE_MANIFEST_ASSET_NAME).write_text("manifest\n", encoding="utf-8")
+        (release_assets / RELEASE_MANIFEST_SIGNATURE_ASSET_NAME).write_text("signature\n", encoding="utf-8")
+        write_checksums(release_assets)
+        checksums = (release_assets / CHECKSUMS_ASSET_NAME).read_text(encoding="utf-8")
+        assert RELEASE_MANIFEST_ASSET_NAME in checksums
+        assert RELEASE_MANIFEST_SIGNATURE_ASSET_NAME in checksums
+        assert CHECKSUMS_ASSET_NAME not in checksums
 
 
 def main() -> None:
@@ -259,6 +287,10 @@ def main() -> None:
     validate_parser = subparsers.add_parser("validate")
     validate_parser.add_argument("--release-assets", default="dist/release-assets")
     validate_parser.set_defaults(func=validate)
+
+    checksums_parser = subparsers.add_parser("refresh-checksums")
+    checksums_parser.add_argument("--release-assets", default="dist/release-assets")
+    checksums_parser.set_defaults(func=refresh_checksums)
 
     test_parser = subparsers.add_parser("self-test")
     test_parser.set_defaults(func=lambda _args: self_test())
