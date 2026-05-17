@@ -97,7 +97,7 @@ scripts/build_sumi_adblock_bundle.sh --all-profiles --output .build/sumi-adblock
 for bundle in .build/sumi-adblock-bundles/*/SumiAdblockBundle; do scripts/verify_sumi_adblock_bundle.sh "$bundle"; done
 python3 scripts/prepare_release_payload.py prepare --bundles-root .build/sumi-adblock-bundles --output dist
 python3 scripts/prepare_release_payload.py validate --release-assets dist/release-assets
-SUMI_PROTECTION_BUNDLE_ED25519_PRIVATE_KEY="$(cat /path/to/private.pem)" python3 scripts/sign_release_manifest.py --manifest dist/release-assets/sumi-protection-bundles-release.json --signature dist/release-assets/sumi-protection-bundles-release.json.sig --key-id sumi-protection-bundles-ed25519-v1
-SUMI_PROTECTION_BUNDLE_ED25519_PRIVATE_KEY="$(cat /path/to/private.pem)" python3 scripts/verify_release_manifest_signature.py --manifest dist/release-assets/sumi-protection-bundles-release.json --signature dist/release-assets/sumi-protection-bundles-release.json.sig --expected-key-id sumi-protection-bundles-ed25519-v1
+SUMI_PROTECTION_BUNDLE_ED25519_PRIVATE_KEY="$(cat .build/local-signing-key/sumi-protection-bundles-ed25519-v1.private.pem)" python3 scripts/sign_release_manifest.py --manifest dist/release-assets/sumi-protection-bundles-release.json --signature dist/release-assets/sumi-protection-bundles-release.json.sig --key-id sumi-protection-bundles-ed25519-v1
+SUMI_PROTECTION_BUNDLE_ED25519_PRIVATE_KEY="$(cat .build/local-signing-key/sumi-protection-bundles-ed25519-v1.private.pem)" python3 scripts/verify_release_manifest_signature.py --manifest dist/release-assets/sumi-protection-bundles-release.json --signature dist/release-assets/sumi-protection-bundles-release.json.sig --expected-key-id sumi-protection-bundles-ed25519-v1
 python3 scripts/prepare_release_payload.py refresh-checksums --release-assets dist/release-assets
 ```
