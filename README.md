@@ -56,18 +56,22 @@ Never commit the private key, seed phrase, `.pem`, `.key`, or generated private-
 Generate a key pair locally:
 
 ```sh
-openssl genpkey -algorithm Ed25519 -out sumi-protection-bundles-ed25519-v1.private.pem
-openssl pkey -in sumi-protection-bundles-ed25519-v1.private.pem -pubout -out sumi-protection-bundles-ed25519-v1.public.pem
-openssl pkey -in sumi-protection-bundles-ed25519-v1.private.pem -pubout -outform DER | tail -c 32 | base64
+umask 077
+mkdir -p .build/local-signing-key
+chmod 700 .build/local-signing-key
+openssl genpkey -algorithm Ed25519 -out .build/local-signing-key/sumi-protection-bundles-ed25519-v1.private.pem
+chmod 600 .build/local-signing-key/sumi-protection-bundles-ed25519-v1.private.pem
+openssl pkey -in .build/local-signing-key/sumi-protection-bundles-ed25519-v1.private.pem -pubout -out .build/local-signing-key/sumi-protection-bundles-ed25519-v1.public.pem
+openssl pkey -in .build/local-signing-key/sumi-protection-bundles-ed25519-v1.private.pem -pubout -outform DER | tail -c 32 | base64
 ```
 
 Add the private key to GitHub without printing it in logs:
 
 ```sh
-gh secret set SUMI_PROTECTION_BUNDLE_ED25519_PRIVATE_KEY < sumi-protection-bundles-ed25519-v1.private.pem
+gh secret set SUMI_PROTECTION_BUNDLE_ED25519_PRIVATE_KEY < .build/local-signing-key/sumi-protection-bundles-ed25519-v1.private.pem
 ```
 
-Add the base64 raw public key from the last command to Sumi's pinned key list for key id `sumi-protection-bundles-ed25519-v1`, then delete the local private-key file or move it into your secure secret-storage process.
+Add the base64 raw public key from the last command to Sumi's pinned key list for key id `sumi-protection-bundles-ed25519-v1`, then delete `.build/local-signing-key/`.
 
 Key rotation:
 
