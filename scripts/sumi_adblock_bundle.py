@@ -24,6 +24,32 @@ SAFETY_POLICY_VERSION = "sumi-native-css-safety/0.4"
 ADAPTER_VERSION = "adblock-rust-adapter/0.1.0 adblock-rust/0.12.5"
 DEFAULT_MAX_RULES_PER_SHARD = 25_000
 DEFAULT_MAX_BYTES_PER_SHARD = 3_000_000
+TRACKING_NETWORK_GROUP_ID = "trackingNetwork"
+ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID = "adblockAdsPrivacyNetwork"
+PROTECTION_LEVEL_GROUPS: dict[str, list[str]] = {
+    "off": [],
+    "protection": [TRACKING_NETWORK_GROUP_ID],
+    "adblock": [TRACKING_NETWORK_GROUP_ID, ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID],
+}
+DDG_TDS_SOURCE_NAME = "DuckDuckGo Tracker Radar / TDS"
+DDG_TDS_SOURCE_URL = "https://staticcdn.duckduckgo.com/trackerblocking/v6/current/macos-tds.json"
+DDG_TDS_SOURCE_LICENSE = "CC BY-NC-SA 4.0"
+DDG_TDS_SOURCE_LICENSE_URL = "https://creativecommons.org/licenses/by-nc-sa/4.0/"
+DDG_TDS_ATTRIBUTION = (
+    "Derived from DuckDuckGo Tracker Radar / Tracker Data Set. "
+    "Use and redistribution of generated tracking data are limited to non-commercial "
+    "Sumi protection bundles and remain subject to CC BY-NC-SA 4.0 share-alike terms."
+)
+TRACKING_GENERATOR_VERSION = "sumi-ddg-tds-webkit/0.1 tracker-radar-kit-compatible"
+TRACKER_RADAR_SUBDOMAIN_PREFIX = "^[^:]+://+([^:/]+\\.)?"
+TRACKER_RADAR_DOMAIN_MATCH_SUFFIX = "[:/]"
+TRACKER_RADAR_RESOURCE_MAPPING = {
+    "script": "script",
+    "xmlhttprequest": "raw",
+    "subdocument": "document",
+    "image": "image",
+    "stylesheet": "style-sheet",
+}
 
 
 DEFAULT_LISTS: dict[str, dict[str, Any]] = {
@@ -82,6 +108,33 @@ class NativeDedupeResult:
     duplicate_removed: int
     skipped_count: int
     skipped_reasons: Counter[str]
+
+
+@dataclass
+class PreparedGroup:
+    group_id: str
+    display_name: str
+    status: str
+    rules: list[dict[str, Any]]
+    shards: list[dict[str, Any]]
+    rule_count: int
+    shard_count: int
+    source: dict[str, Any]
+    deduplication: dict[str, Any]
+    notes: list[str]
+
+    @property
+    def asset_relative_paths(self) -> list[str]:
+        return sorted(shard["relativePath"] for shard in self.shards)
+
+
+@dataclass
+class TrackingRulesResult:
+    rules: list[dict[str, Any]]
+    input_rule_count: int
+    source: dict[str, Any]
+    deduplication: dict[str, Any]
+    diagnostics: dict[str, Any]
 
 
 def repo_root() -> Path:
@@ -160,6 +213,34 @@ def fetch_or_reuse_list(
     preview = data[:4096].decode("utf-8", errors="ignore").strip().lower()
     if preview.startswith("<!doctype html") or preview.startswith("<html"):
         raise SystemExit(f"Downloaded list appears to be HTML: {list_id}")
+    cache_path.write_bytes(data)
+    return data
+
+
+def fetch_or_reuse_tracking_tds(
+    cache_dir: Path,
+    refresh: bool,
+    offline: bool,
+    tracking_tds_url: str,
+    tracking_tds_file: Path | None,
+) -> bytes:
+    if tracking_tds_file is not None:
+        return tracking_tds_file.read_bytes()
+
+    tracking_cache_dir = cache_dir / "trackingNetwork"
+    tracking_cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = tracking_cache_dir / "macos-tds.json"
+    if cache_path.exists() and not refresh:
+        return cache_path.read_bytes()
+    if offline:
+        raise SystemExit("Missing cached DDG TDS for offline trackingNetwork build.")
+
+    data = fetch_url_bytes(tracking_tds_url)
+    if len(data) < 1024:
+        raise SystemExit("Downloaded DDG TDS is suspiciously small.")
+    preview = data[:4096].decode("utf-8", errors="ignore").strip().lower()
+    if preview.startswith("<!doctype html") or preview.startswith("<html"):
+        raise SystemExit("Downloaded DDG TDS appears to be HTML.")
     cache_path.write_bytes(data)
     return data
 
@@ -586,31 +667,647 @@ def overlap_diagnostics(list_lines: dict[str, list[str]], selected_list_ids: lis
     }
 
 
+def regex_escape_tracker_domain(value: str) -> str:
+    return value.replace("\\", "\\\\").replace(".", "\\.").replace("/", "\\/")
+
+
+def wildcard_domains(domains: list[str] | None) -> list[str] | None:
+    if domains is None:
+        return None
+    return ["*" + domain for domain in domains]
+
+
+def map_resource_types(types: list[str] | None) -> list[str] | None:
+    if types is None:
+        return None
+    return [
+        TRACKER_RADAR_RESOURCE_MAPPING[value]
+        for value in types
+        if value in TRACKER_RADAR_RESOURCE_MAPPING
+    ]
+
+
+def tracking_trigger(
+    url_filter: str,
+    *,
+    unless_domain: list[str] | None = None,
+    if_domain: list[str] | None = None,
+    resource_type: list[str] | None = None,
+    load_type: list[str] | None = None,
+    load_context: list[str] | None = None,
+) -> dict[str, Any]:
+    trigger: dict[str, Any] = {"url-filter": url_filter}
+    if unless_domain is not None:
+        trigger["unless-domain"] = unless_domain
+    if if_domain is not None:
+        trigger["if-domain"] = if_domain
+    if resource_type is not None:
+        trigger["resource-type"] = resource_type
+    if load_type is not None:
+        trigger["load-type"] = load_type
+    if load_context is not None:
+        trigger["load-context"] = load_context
+    return trigger
+
+
+def tracking_rule(trigger: dict[str, Any], action_type: str) -> dict[str, Any]:
+    return {
+        "trigger": trigger,
+        "action": {"type": action_type},
+    }
+
+
+def tracker_owner_related_domains(tds: dict[str, Any], owner: dict[str, Any] | None) -> list[str] | None:
+    owner_name = owner.get("name") if isinstance(owner, dict) else None
+    if not isinstance(owner_name, str):
+        return None
+    entity = tds.get("entities", {}).get(owner_name)
+    if not isinstance(entity, dict):
+        return None
+    domains = entity.get("domains")
+    if not isinstance(domains, list):
+        return None
+    return [domain for domain in domains if isinstance(domain, str)]
+
+
+def normalized_tracker_rule_filter(rule: dict[str, Any]) -> str | None:
+    value = rule.get("rule")
+    if not isinstance(value, str) or not value:
+        return None
+    if value.startswith("http"):
+        return value
+    return TRACKER_RADAR_SUBDOMAIN_PREFIX + value
+
+
+def tracker_matching_if_domains(matching: dict[str, Any] | None) -> list[str] | None:
+    if not isinstance(matching, dict):
+        return None
+    domains = matching.get("domains")
+    if not isinstance(domains, list):
+        return None
+    return ["*" + domain for domain in domains if isinstance(domain, str)]
+
+
+def tracker_matching_resource_types(matching: dict[str, Any] | None) -> list[str] | None:
+    if not isinstance(matching, dict):
+        return None
+    types = matching.get("types")
+    if not isinstance(types, list):
+        return None
+    return map_resource_types([value for value in types if isinstance(value, str)])
+
+
+def tracker_default_is_block(tracker: dict[str, Any]) -> bool:
+    return tracker.get("default") in {"block", "block-ctl-fb"}
+
+
+def block_tracking_rule(
+    rule: dict[str, Any],
+    *,
+    tds: dict[str, Any],
+    owner: dict[str, Any] | None,
+    matching: dict[str, Any] | None = None,
+    load_types: list[str],
+) -> dict[str, Any] | None:
+    url_filter = normalized_tracker_rule_filter(rule)
+    if url_filter is None:
+        return None
+    if matching is not None:
+        return tracking_rule(
+            tracking_trigger(
+                url_filter,
+                if_domain=tracker_matching_if_domains(matching),
+                resource_type=tracker_matching_resource_types(matching),
+                load_type=["third-party"],
+            ),
+            "block",
+        )
+    return tracking_rule(
+        tracking_trigger(
+            url_filter,
+            unless_domain=wildcard_domains(tracker_owner_related_domains(tds, owner)),
+            load_type=load_types,
+        ),
+        "block",
+    )
+
+
+def ignore_previous_tracking_rule(
+    rule: dict[str, Any],
+    *,
+    matching: dict[str, Any] | None = None,
+    resource_types: list[str] | None = None,
+    load_types: list[str],
+    load_context: list[str] | None = None,
+) -> dict[str, Any] | None:
+    url_filter = normalized_tracker_rule_filter(rule)
+    if url_filter is None:
+        return None
+    return tracking_rule(
+        tracking_trigger(
+            url_filter,
+            if_domain=tracker_matching_if_domains(matching),
+            resource_type=resource_types if resource_types is not None else tracker_matching_resource_types(matching),
+            load_type=load_types,
+            load_context=load_context,
+        ),
+        "ignore-previous-rules",
+    )
+
+
+def build_rules_for_ignored_tracker_rule(
+    rule: dict[str, Any],
+    *,
+    tracker: dict[str, Any],
+    tds: dict[str, Any],
+    load_types: list[str],
+) -> list[dict[str, Any]]:
+    options = rule.get("options") if isinstance(rule.get("options"), dict) else None
+    exceptions = rule.get("exceptions") if isinstance(rule.get("exceptions"), dict) else None
+    owner = tracker.get("owner") if isinstance(tracker.get("owner"), dict) else None
+
+    if rule.get("action") == "ignore":
+        candidates = [
+            block_tracking_rule(rule, tds=tds, owner=owner, load_types=load_types),
+            ignore_previous_tracking_rule(rule, matching=options, load_types=load_types),
+        ]
+    elif options is None and exceptions is None:
+        candidates = [
+            block_tracking_rule(rule, tds=tds, owner=owner, load_types=load_types),
+            ignore_previous_tracking_rule(
+                rule,
+                resource_types=["popup"],
+                load_types=load_types,
+                load_context=["top-frame"],
+            ),
+        ]
+    elif exceptions is not None and options is not None:
+        candidates = [
+            block_tracking_rule(rule, tds=tds, owner=owner, matching=options, load_types=load_types),
+            ignore_previous_tracking_rule(rule, matching=exceptions, load_types=load_types),
+        ]
+    elif options is not None:
+        candidates = [
+            block_tracking_rule(rule, tds=tds, owner=owner, matching=options, load_types=load_types),
+        ]
+    elif exceptions is not None:
+        candidates = [
+            block_tracking_rule(rule, tds=tds, owner=owner, load_types=load_types),
+            ignore_previous_tracking_rule(rule, matching=exceptions, load_types=load_types),
+        ]
+    else:
+        candidates = []
+    return [candidate for candidate in candidates if candidate is not None]
+
+
+def build_rules_for_blocked_tracker_rule(
+    rule: dict[str, Any],
+    *,
+    tracker: dict[str, Any],
+    tds: dict[str, Any],
+    load_types: list[str],
+) -> list[dict[str, Any]]:
+    options = rule.get("options") if isinstance(rule.get("options"), dict) else None
+    exceptions = rule.get("exceptions") if isinstance(rule.get("exceptions"), dict) else None
+    owner = tracker.get("owner") if isinstance(tracker.get("owner"), dict) else None
+
+    if options is not None and exceptions is not None:
+        candidates = [
+            ignore_previous_tracking_rule(rule, load_types=load_types),
+            block_tracking_rule(rule, tds=tds, owner=owner, matching=options, load_types=load_types),
+            ignore_previous_tracking_rule(rule, matching=exceptions, load_types=load_types),
+        ]
+    elif rule.get("action") == "ignore":
+        candidates = [
+            ignore_previous_tracking_rule(rule, matching=options, load_types=load_types),
+        ]
+    elif options is not None:
+        candidates = [
+            ignore_previous_tracking_rule(rule, load_types=load_types),
+            block_tracking_rule(rule, tds=tds, owner=owner, matching=options, load_types=load_types),
+        ]
+    elif exceptions is not None:
+        candidates = [
+            ignore_previous_tracking_rule(rule, matching=exceptions, load_types=load_types),
+        ]
+    else:
+        candidates = [
+            block_tracking_rule(rule, tds=tds, owner=owner, load_types=load_types),
+        ]
+    return [candidate for candidate in candidates if candidate is not None]
+
+
+def build_rules_from_tracker(
+    tracker: dict[str, Any],
+    *,
+    tds: dict[str, Any],
+    load_types: list[str],
+) -> list[dict[str, Any]]:
+    rules: list[dict[str, Any]] = []
+    if tracker_default_is_block(tracker):
+        domain = tracker.get("domain")
+        if isinstance(domain, str) and domain:
+            url_filter = (
+                TRACKER_RADAR_SUBDOMAIN_PREFIX
+                + regex_escape_tracker_domain(domain)
+                + TRACKER_RADAR_DOMAIN_MATCH_SUFFIX
+            )
+            owner = tracker.get("owner") if isinstance(tracker.get("owner"), dict) else None
+            rules.append(
+                tracking_rule(
+                    tracking_trigger(
+                        url_filter,
+                        unless_domain=wildcard_domains(tracker_owner_related_domains(tds, owner)),
+                        load_type=load_types,
+                    ),
+                    "block",
+                )
+            )
+            rules.append(
+                tracking_rule(
+                    tracking_trigger(
+                        url_filter,
+                        resource_type=["popup"],
+                        load_type=load_types,
+                        load_context=["top-frame"],
+                    ),
+                    "ignore-previous-rules",
+                )
+            )
+
+    special_rule_groups: list[list[dict[str, Any]]] = []
+    tracker_rules = tracker.get("rules")
+    if isinstance(tracker_rules, list):
+        for rule in tracker_rules:
+            if not isinstance(rule, dict):
+                continue
+            if tracker_default_is_block(tracker):
+                built = build_rules_for_blocked_tracker_rule(rule, tracker=tracker, tds=tds, load_types=load_types)
+            else:
+                built = build_rules_for_ignored_tracker_rule(rule, tracker=tracker, tds=tds, load_types=load_types)
+            if built:
+                special_rule_groups.append(built)
+
+    seen_special: set[str] = set()
+    for group in sorted(special_rule_groups, key=len, reverse=True):
+        for rule in group:
+            key = canonical_json(rule)
+            if key in seen_special:
+                continue
+            seen_special.add(key)
+            rules.append(rule)
+    return rules
+
+
+def find_tracker_by_cname(tds: dict[str, Any], cname: str) -> dict[str, Any] | None:
+    trackers = tds.get("trackers")
+    if not isinstance(trackers, dict):
+        return None
+    current = cname
+    while "." in current:
+        tracker = trackers.get(current)
+        if isinstance(tracker, dict):
+            return tracker
+        current = ".".join(current.split(".")[1:])
+    return None
+
+
+def validate_tds_shape(tds: Any) -> dict[str, Any]:
+    if not isinstance(tds, dict):
+        raise SystemExit("DDG TDS must be a JSON object.")
+    for key in ["trackers", "entities", "domains"]:
+        if not isinstance(tds.get(key), dict):
+            raise SystemExit(f"DDG TDS is missing object field: {key}")
+    if "cnames" in tds and not isinstance(tds["cnames"], dict):
+        raise SystemExit("DDG TDS cnames field must be an object when present.")
+    return tds
+
+
+def tracking_tds_diagnostics(tds: dict[str, Any], rules: list[dict[str, Any]]) -> dict[str, Any]:
+    trackers = tds["trackers"]
+    entities = tds["entities"]
+    domains = tds["domains"]
+    cnames = tds.get("cnames") or {}
+    defaults = Counter(
+        tracker.get("default", "missing")
+        for tracker in trackers.values()
+        if isinstance(tracker, dict)
+    )
+    tracker_rule_count = 0
+    trackers_with_rules = 0
+    skipped_missing_rule_patterns = 0
+    for tracker in trackers.values():
+        if not isinstance(tracker, dict):
+            continue
+        tracker_rules = tracker.get("rules")
+        if not isinstance(tracker_rules, list):
+            continue
+        trackers_with_rules += 1
+        tracker_rule_count += len(tracker_rules)
+        skipped_missing_rule_patterns += sum(
+            1
+            for rule in tracker_rules
+            if not isinstance(rule, dict) or not isinstance(rule.get("rule"), str)
+        )
+    return {
+        "sourceName": DDG_TDS_SOURCE_NAME,
+        "trackerCount": len(trackers),
+        "entityCount": len(entities),
+        "domainCount": len(domains),
+        "cnameCount": len(cnames),
+        "trackerRuleCount": tracker_rule_count,
+        "trackersWithSpecialRules": trackers_with_rules,
+        "generatedWebKitRuleCount": len(rules),
+        "defaultActionCounts": dict(sorted(defaults.items())),
+        "skippedMissingRulePatternCount": skipped_missing_rule_patterns,
+    }
+
+
+def generate_tracking_webkit_rules_from_tds(tds: dict[str, Any]) -> list[dict[str, Any]]:
+    trackers = tds["trackers"]
+    rules: list[dict[str, Any]] = []
+    for domain in sorted(trackers):
+        tracker = trackers[domain]
+        if isinstance(tracker, dict):
+            rules.extend(build_rules_from_tracker(tracker, tds=tds, load_types=["third-party"]))
+
+    cnames = tds.get("cnames") or {}
+    if isinstance(cnames, dict):
+        for cname_domain in sorted(cnames):
+            cname = cnames[cname_domain]
+            if not isinstance(cname, str):
+                continue
+            tracker = find_tracker_by_cname(tds, cname)
+            if tracker is None:
+                continue
+            cname_tracker = dict(tracker)
+            cname_tracker["domain"] = cname_domain
+            rules.extend(
+                build_rules_from_tracker(
+                    cname_tracker,
+                    tds=tds,
+                    load_types=["first-party", "third-party"],
+                )
+            )
+    return rules
+
+
+def load_prepared_webkit_rules(path: Path) -> list[dict[str, Any]]:
+    try:
+        data = path.read_bytes()
+        parsed = json.loads(data.decode("utf-8"))
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"Prepared WebKit JSON is invalid: {path}: {error}") from error
+    if not isinstance(parsed, list):
+        raise SystemExit(f"Prepared WebKit JSON must be an array: {path}")
+    if not parsed:
+        raise SystemExit(f"Prepared WebKit JSON is empty: {path}")
+    for index, rule in enumerate(parsed):
+        if not isinstance(rule, dict):
+            raise SystemExit(f"Prepared WebKit rule at index {index} is not an object: {path}")
+        trigger = rule.get("trigger")
+        action = rule.get("action")
+        if not isinstance(trigger, dict) or not isinstance(action, dict):
+            raise SystemExit(f"Prepared WebKit rule at index {index} is missing trigger/action objects: {path}")
+        if not isinstance(trigger.get("url-filter"), str):
+            raise SystemExit(f"Prepared WebKit rule at index {index} is missing trigger.url-filter: {path}")
+        if not isinstance(action.get("type"), str):
+            raise SystemExit(f"Prepared WebKit rule at index {index} is missing action.type: {path}")
+    return parsed
+
+
+def tracking_source_metadata(
+    *,
+    source_type: str,
+    source_name: str,
+    source_url: str | None,
+    source_license: str,
+    source_license_url: str | None,
+    attribution: str | None,
+    source_sha256: str,
+    source_byte_size: int,
+    input_path: str | None,
+    generator: str,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "type": source_type,
+        "name": source_name,
+        "sourceName": source_name,
+        "url": source_url,
+        "sourceURL": source_url,
+        "license": source_license,
+        "sourceLicense": source_license,
+        "sourceLicenseURL": source_license_url,
+        "attribution": attribution,
+        "sourceSha256": source_sha256,
+        "sourceByteSize": source_byte_size,
+        "generator": generator,
+    }
+    if input_path is not None:
+        metadata["inputPath"] = input_path
+    if source_license == DDG_TDS_SOURCE_LICENSE:
+        metadata["nonCommercialOnly"] = True
+        metadata["shareAlike"] = True
+    return metadata
+
+
+def load_tracking_rules(
+    *,
+    cache_dir: Path,
+    refresh: bool,
+    offline: bool,
+    tracking_tds_url: str,
+    tracking_tds_file: Path | None,
+    tracking_webkit_json: Path | None,
+    tracking_source_name: str | None,
+    tracking_source_url: str | None,
+    tracking_source_license: str | None,
+) -> TrackingRulesResult:
+    if tracking_webkit_json is not None:
+        raw_data = tracking_webkit_json.read_bytes()
+        rules = load_prepared_webkit_rules(tracking_webkit_json)
+        dedupe = dedupe_native_rules(rules)
+        source_name = tracking_source_name or tracking_webkit_json.name
+        source_url = tracking_source_url
+        source_license = tracking_source_license or "caller-attested"
+        return TrackingRulesResult(
+            rules=dedupe.rules,
+            input_rule_count=len(rules),
+            source=tracking_source_metadata(
+                source_type="preparedWebKitJSON",
+                source_name=source_name,
+                source_url=source_url,
+                source_license=source_license,
+                source_license_url=None,
+                attribution=None,
+                source_sha256=sha256_hex(raw_data),
+                source_byte_size=len(raw_data),
+                input_path=str(tracking_webkit_json),
+                generator="precompiled-webkit-json",
+            ),
+            deduplication={
+                "inputRuleCount": len(rules),
+                "nativeJSONDuplicateCountRemoved": dedupe.duplicate_removed,
+                "skippedDedupeCount": dedupe.skipped_count,
+                "skippedDedupeReasons": dict(sorted(dedupe.skipped_reasons.items())),
+            },
+            diagnostics={
+                "sourceName": source_name,
+                "generatedWebKitRuleCount": len(dedupe.rules),
+                "inputPreparedWebKitRuleCount": len(rules),
+            },
+        )
+
+    raw_data = fetch_or_reuse_tracking_tds(
+        cache_dir=cache_dir,
+        refresh=refresh,
+        offline=offline,
+        tracking_tds_url=tracking_tds_url,
+        tracking_tds_file=tracking_tds_file,
+    )
+    try:
+        tds = validate_tds_shape(json.loads(raw_data.decode("utf-8")))
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"DDG TDS JSON is invalid: {error}") from error
+    rules = generate_tracking_webkit_rules_from_tds(tds)
+    if not rules:
+        raise SystemExit("DDG TDS generated no trackingNetwork WebKit rules.")
+    dedupe = dedupe_native_rules(rules)
+    source_url = tracking_source_url or tracking_tds_url
+    return TrackingRulesResult(
+        rules=dedupe.rules,
+        input_rule_count=len(rules),
+        source=tracking_source_metadata(
+            source_type="ddgTDS",
+            source_name=tracking_source_name or DDG_TDS_SOURCE_NAME,
+            source_url=source_url,
+            source_license=tracking_source_license or DDG_TDS_SOURCE_LICENSE,
+            source_license_url=DDG_TDS_SOURCE_LICENSE_URL,
+            attribution=DDG_TDS_ATTRIBUTION,
+            source_sha256=sha256_hex(raw_data),
+            source_byte_size=len(raw_data),
+            input_path=str(tracking_tds_file) if tracking_tds_file is not None else None,
+            generator=TRACKING_GENERATOR_VERSION,
+        ),
+        deduplication={
+            "inputRuleCount": len(rules),
+            "nativeJSONDuplicateCountRemoved": dedupe.duplicate_removed,
+            "skippedDedupeCount": dedupe.skipped_count,
+            "skippedDedupeReasons": dict(sorted(dedupe.skipped_reasons.items())),
+        },
+        diagnostics=tracking_tds_diagnostics(tds, dedupe.rules),
+    )
+
+
+def build_tracking_group(
+    *,
+    bundle_dir: Path,
+    generation_id: str,
+    generated_at: datetime,
+    tracking_rules: TrackingRulesResult,
+    max_rules: int,
+    max_bytes: int,
+) -> PreparedGroup:
+    shards = write_shards(
+        bundle_dir,
+        generation_id,
+        "trackingNetwork",
+        "network",
+        TRACKING_NETWORK_GROUP_ID,
+        "sumi.tracking.network",
+        tracking_rules.rules,
+        max_rules,
+        max_bytes,
+    )
+    source = dict(tracking_rules.source)
+    source.update(
+        {
+            "generatedAt": generated_at.isoformat().replace("+00:00", "Z"),
+            "ruleCount": len(tracking_rules.rules),
+            "shardCount": len(shards),
+        }
+    )
+    return PreparedGroup(
+        group_id=TRACKING_NETWORK_GROUP_ID,
+        display_name="Tracking network",
+        status="generated",
+        rules=tracking_rules.rules,
+        shards=shards,
+        rule_count=len(tracking_rules.rules),
+        shard_count=len(shards),
+        source=source,
+        deduplication=tracking_rules.deduplication,
+        notes=[],
+    )
+
+
+def group_manifest_entry(group: PreparedGroup, active_levels: list[str]) -> dict[str, Any]:
+    return {
+        "id": group.group_id,
+        "displayName": group.display_name,
+        "status": group.status,
+        "activeLevels": active_levels,
+        "ruleCount": group.rule_count,
+        "shardCount": group.shard_count,
+        "assetRelativePaths": group.asset_relative_paths,
+        "source": group.source,
+        "deduplication": group.deduplication,
+        "notes": group.notes,
+    }
+
+
+def cross_group_overlap_diagnostics(
+    tracking_rules: list[dict[str, Any]],
+    adblock_rules: list[dict[str, Any]],
+) -> dict[str, Any]:
+    tracking_canonical = {canonical_json(rule) for rule in tracking_rules}
+    adblock_canonical = {canonical_json(rule) for rule in adblock_rules}
+    exact_duplicates = tracking_canonical & adblock_canonical
+    notes: list[str] = []
+    if tracking_rules and adblock_rules:
+        notes.append(
+            "Exact duplicate WebKit JSON rules are reported across groups only; cross-group rules are not removed because Protection and Adblock activate different group sets."
+        )
+    else:
+        notes.append("Cross-group overlap requires both trackingNetwork and adblockAdsPrivacyNetwork WebKit JSON rules.")
+    return {
+        "trackingNetworkRuleCount": len(tracking_rules),
+        "adblockAdsPrivacyNetworkRuleCount": len(adblock_rules),
+        "exactDuplicateRuleCount": len(exact_duplicates),
+        "dedupeApplied": False,
+        "notes": notes,
+    }
+
+
 def write_shards(
     bundle_dir: Path,
     generation_id: str,
+    directory_name: str,
     kind: str,
+    group_id: str,
+    webkit_identifier_prefix: str,
     rules: list[dict[str, Any]],
     max_rules: int,
     max_bytes: int,
 ) -> list[dict[str, Any]]:
-    group_dir = bundle_dir / kind
+    group_dir = bundle_dir / directory_name
     group_dir.mkdir(parents=True, exist_ok=True)
     shards: list[dict[str, Any]] = []
     for index, chunk in enumerate(chunk_rules(rules, max_rules, max_bytes), start=1):
-        relative_path = f"{kind}/{kind}-{index:04d}.json"
+        relative_path = f"{directory_name}/{directory_name}-{index:04d}.json"
         data = encoded_rule_list(chunk)
         digest = sha256_hex(data)
         (bundle_dir / relative_path).write_bytes(data)
         shards.append(
             {
                 "kind": kind,
-                "group": kind,
+                "group": group_id,
+                "logicalGroup": group_id,
                 "relativePath": relative_path,
                 "hash": digest,
                 "byteSize": len(data),
                 "ruleCount": len(chunk),
-                "webKitIdentifier": f"sumi.adblock.{kind}.{generation_id}.{index:04d}.{digest[:12]}",
+                "webKitIdentifier": f"{webkit_identifier_prefix}.{generation_id}.{index:04d}.{digest[:12]}",
             }
         )
     return shards
@@ -638,6 +1335,16 @@ def build_bundle(args: argparse.Namespace) -> None:
             refresh=args.refresh,
             offline=args.offline,
             overrides=overrides,
+            tracking_tds_url=args.tracking_tds_url,
+            tracking_tds_file=Path(args.tracking_tds_file).expanduser().resolve()
+            if args.tracking_tds_file
+            else None,
+            tracking_webkit_json=Path(args.tracking_webkit_json).expanduser().resolve()
+            if args.tracking_webkit_json
+            else None,
+            tracking_source_name=args.tracking_source_name,
+            tracking_source_url=args.tracking_source_url,
+            tracking_source_license=args.tracking_source_license,
             max_rules=args.max_rules_per_shard,
             max_bytes=args.max_bytes_per_shard,
         )
@@ -651,6 +1358,12 @@ def build_one_bundle(
     refresh: bool,
     offline: bool,
     overrides: dict[str, Path],
+    tracking_tds_url: str,
+    tracking_tds_file: Path | None,
+    tracking_webkit_json: Path | None,
+    tracking_source_name: str | None,
+    tracking_source_url: str | None,
+    tracking_source_license: str | None,
     max_rules: int,
     max_bytes: int,
 ) -> None:
@@ -680,6 +1393,17 @@ def build_one_bundle(
     memory["afterNativeJSONDedupeResidentBytes"] = current_resident_memory_bytes()
 
     generated_at = datetime.now(timezone.utc)
+    tracking_rules = load_tracking_rules(
+        cache_dir=cache_dir,
+        refresh=refresh,
+        offline=offline,
+        tracking_tds_url=tracking_tds_url,
+        tracking_tds_file=tracking_tds_file,
+        tracking_webkit_json=tracking_webkit_json,
+        tracking_source_name=tracking_source_name,
+        tracking_source_url=tracking_source_url,
+        tracking_source_license=tracking_source_license,
+    )
     seed = canonical_json(
         {
             "profile": profile_id,
@@ -689,18 +1413,81 @@ def build_one_bundle(
             },
             "network": len(network_dedupe.rules),
             "nativeCSS": len(css_dedupe.rules),
+            "trackingNetwork": len(tracking_rules.rules),
+            "trackingSourceSha256": tracking_rules.source.get("sourceSha256"),
             "rawDuplicates": raw_dedupe.duplicate_removed,
-            "nativeDuplicates": network_dedupe.duplicate_removed + css_dedupe.duplicate_removed,
+            "nativeDuplicates": (
+                network_dedupe.duplicate_removed
+                + css_dedupe.duplicate_removed
+                + tracking_rules.deduplication.get("nativeJSONDuplicateCountRemoved", 0)
+            ),
         }
     )
     generation_hash = sha256_hex(seed.encode("utf-8"))[:12]
     generation_id = generated_at.strftime("%Y%m%dT%H%M%SZ") + "-" + generation_hash
     bundle_id = f"sumi.adblock.bundle.{profile_id}.{generation_hash}"
 
-    network_shards = write_shards(bundle_dir, generation_id, "network", network_dedupe.rules, max_rules, max_bytes)
-    css_shards = write_shards(bundle_dir, generation_id, "nativeCSS", css_dedupe.rules, max_rules, max_bytes)
-    shards = network_shards + css_shards
+    tracking_group = build_tracking_group(
+        bundle_dir=bundle_dir,
+        generation_id=generation_id,
+        generated_at=generated_at,
+        tracking_rules=tracking_rules,
+        max_rules=max_rules,
+        max_bytes=max_bytes,
+    )
+    network_shards = write_shards(
+        bundle_dir,
+        generation_id,
+        "network",
+        "network",
+        ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID,
+        "sumi.adblock.network",
+        network_dedupe.rules,
+        max_rules,
+        max_bytes,
+    )
+    css_shards = write_shards(
+        bundle_dir,
+        generation_id,
+        "nativeCSS",
+        "nativeCSS",
+        ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID,
+        "sumi.adblock.nativeCSS",
+        css_dedupe.rules,
+        max_rules,
+        max_bytes,
+    )
+    adblock_group = PreparedGroup(
+        group_id=ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID,
+        display_name="Adblock ads and privacy network",
+        status="generated",
+        rules=network_dedupe.rules,
+        shards=network_shards,
+        rule_count=len(network_dedupe.rules),
+        shard_count=len(network_shards),
+        source={
+            "type": "adblockRust",
+            "name": profile["displayName"],
+            "url": None,
+            "license": "see source lists",
+            "generator": ADAPTER_VERSION,
+        },
+        deduplication={
+            "inputRuleCount": raw_dedupe.input_rule_count,
+            "rawDuplicateCountRemoved": raw_dedupe.duplicate_removed,
+            "nativeJSONDuplicateCountRemoved": network_dedupe.duplicate_removed,
+            "skippedDedupeCount": raw_dedupe.skipped_count + network_dedupe.skipped_count,
+            "skippedDedupeReasons": dict(sorted((raw_dedupe.skipped_reasons + network_dedupe.skipped_reasons).items())),
+        },
+        notes=[],
+    )
+    groups = [tracking_group, adblock_group]
+    shards = tracking_group.shards + network_shards + css_shards
     overlap = overlap_diagnostics(list_lines, selected_list_ids)
+    cross_group_overlap = cross_group_overlap_diagnostics(
+        tracking_group.rules,
+        adblock_group.rules,
+    )
 
     list_entries = []
     for list_id in selected_list_ids:
@@ -718,10 +1505,13 @@ def build_one_bundle(
             }
         )
 
-    native_duplicates = network_dedupe.duplicate_removed + css_dedupe.duplicate_removed
-    skipped_reasons = raw_dedupe.skipped_reasons + network_dedupe.skipped_reasons + css_dedupe.skipped_reasons
-    skipped_count = raw_dedupe.skipped_count + network_dedupe.skipped_count + css_dedupe.skipped_count
-    final_rule_count = len(network_dedupe.rules) + len(css_dedupe.rules)
+    tracking_native_duplicates = tracking_group.deduplication.get("nativeJSONDuplicateCountRemoved", 0)
+    tracking_skipped_count = tracking_group.deduplication.get("skippedDedupeCount", 0)
+    native_duplicates = network_dedupe.duplicate_removed + css_dedupe.duplicate_removed + tracking_native_duplicates
+    tracking_skipped_reasons = Counter(tracking_group.deduplication.get("skippedDedupeReasons", {}))
+    skipped_reasons = raw_dedupe.skipped_reasons + network_dedupe.skipped_reasons + css_dedupe.skipped_reasons + tracking_skipped_reasons
+    skipped_count = raw_dedupe.skipped_count + network_dedupe.skipped_count + css_dedupe.skipped_count + tracking_skipped_count
+    final_rule_count = tracking_group.rule_count + len(network_dedupe.rules) + len(css_dedupe.rules)
     warnings = overlap["warnings"]
 
     manifest = {
@@ -738,11 +1528,24 @@ def build_one_bundle(
         "nativeCSSSafetyPolicyVersion": SAFETY_POLICY_VERSION,
         "generatedDate": generated_at.isoformat().replace("+00:00", "Z"),
         "lists": list_entries,
+        "profileLevelMapping": PROTECTION_LEVEL_GROUPS,
+        "groups": [
+            group_manifest_entry(tracking_group, ["protection", "adblock"]),
+            group_manifest_entry(adblock_group, ["adblock"]),
+        ],
         "shards": shards,
         "diagnosticsSummary": {
             "inputRuleCount": raw_dedupe.input_rule_count,
             "finalRuleCount": final_rule_count,
             "finalShardCount": len(shards),
+            "ruleCountsByGroup": {
+                group.group_id: group.rule_count
+                for group in groups
+            },
+            "shardCountsByGroup": {
+                group.group_id: group.shard_count
+                for group in groups
+            },
             "networkRuleCount": len(network_dedupe.rules),
             "nativeCSSRuleCount": len(css_dedupe.rules),
             "unsafeCSSFilteredCount": len(filtered_css),
@@ -766,6 +1569,10 @@ def build_one_bundle(
             "generationId": generation_id,
         },
         "lists": list_entries,
+        "groups": [
+            group_manifest_entry(tracking_group, ["protection", "adblock"]),
+            group_manifest_entry(adblock_group, ["adblock"]),
+        ],
         "rawDeduplication": {
             "inputRuleCount": raw_dedupe.input_rule_count,
             "duplicatesRemoved": raw_dedupe.duplicate_removed,
@@ -774,18 +1581,22 @@ def build_one_bundle(
             "duplicateAttribution": raw_dedupe.duplicate_attribution,
         },
         "nativeJSONDeduplication": {
+            "trackingNetworkDuplicatesRemoved": tracking_group.deduplication.get("nativeJSONDuplicateCountRemoved", 0),
+            "trackingNetworkSkippedDedupeCount": tracking_group.deduplication.get("skippedDedupeCount", 0),
             "networkDuplicatesRemoved": network_dedupe.duplicate_removed,
             "nativeCSSDuplicatesRemoved": css_dedupe.duplicate_removed,
             "networkSkippedDedupeCount": network_dedupe.skipped_count,
             "nativeCSSSkippedDedupeCount": css_dedupe.skipped_count,
-            "skippedDedupeReasons": dict(sorted((network_dedupe.skipped_reasons + css_dedupe.skipped_reasons).items())),
+            "skippedDedupeReasons": dict(sorted((network_dedupe.skipped_reasons + css_dedupe.skipped_reasons + tracking_skipped_reasons).items())),
         },
+        "trackingNetworkSource": tracking_rules.diagnostics,
         "nativeCSSSafety": {
             "policyVersion": SAFETY_POLICY_VERSION,
             "filteredCount": len(filtered_css),
             "filteredSelectors": filtered_css[:1000],
         },
         "overlap": overlap,
+        "crossGroupOverlap": cross_group_overlap,
         "memory": memory,
         "adapter": {
             "unsupportedOrIgnoredCount": len(adapter_output.get("unsupported_or_ignored", [])),
@@ -832,6 +1643,8 @@ def verify_bundle_dir(
         "nativeCSSSafetyPolicyVersion",
         "generatedDate",
         "lists",
+        "profileLevelMapping",
+        "groups",
         "shards",
         "diagnosticsSummary",
         "deduplication",
@@ -841,6 +1654,10 @@ def verify_bundle_dir(
         raise SystemExit(f"Manifest missing required keys: {', '.join(missing)}")
     if not manifest["shards"]:
         raise SystemExit("Bundle has no shards")
+    group_ids = {group.get("id") for group in manifest.get("groups", []) if isinstance(group, dict)}
+    for required_group in [TRACKING_NETWORK_GROUP_ID, ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID]:
+        if required_group not in group_ids:
+            raise SystemExit(f"Bundle manifest missing logical group: {required_group}")
 
     total_rules = 0
     total_bytes = 0
@@ -938,6 +1755,89 @@ def self_test() -> None:
     )
     assert native.duplicate_removed == 1
     assert native.skipped_count == 1
+    overlap = cross_group_overlap_diagnostics(
+        [{"action": {"type": "block"}, "trigger": {"url-filter": "tracker"}}],
+        [{"trigger": {"url-filter": "tracker"}, "action": {"type": "block"}}],
+    )
+    assert overlap["exactDuplicateRuleCount"] == 1
+    assert overlap["dedupeApplied"] is False
+
+    tds_fixture = {
+        "trackers": {
+            "ignored.example": {
+                "domain": "ignored.example",
+                "owner": {"name": "Ignored Co", "displayName": "Ignored Co"},
+                "default": "ignore",
+                "rules": [
+                    {"rule": "ignored\\.example\\/pixel"},
+                ],
+            },
+            "tracker.example": {
+                "domain": "tracker.example",
+                "owner": {"name": "Tracker Co", "displayName": "Tracker Co"},
+                "default": "block",
+                "rules": [
+                    {
+                        "rule": "tracker\\.example\\/special",
+                        "options": {"domains": ["example.com"], "types": ["script"]},
+                        "exceptions": {"domains": ["allowed.example"]},
+                    }
+                ],
+            },
+        },
+        "entities": {
+            "Ignored Co": {"domains": ["ignored.example"], "displayName": "Ignored Co"},
+            "Tracker Co": {"domains": ["tracker.example", "firstparty.example"], "displayName": "Tracker Co"},
+        },
+        "domains": {
+            "ignored.example": "Ignored Co",
+            "tracker.example": "Tracker Co",
+        },
+        "cnames": {
+            "alias.example": "tracker.example",
+        },
+    }
+    tracking_rules = generate_tracking_webkit_rules_from_tds(validate_tds_shape(tds_fixture))
+    assert any(
+        rule["trigger"]["url-filter"] == "^[^:]+://+([^:/]+\\.)?tracker\\.example[:/]"
+        and rule["action"]["type"] == "block"
+        and rule["trigger"]["unless-domain"] == ["*tracker.example", "*firstparty.example"]
+        for rule in tracking_rules
+    )
+    assert any(
+        rule["trigger"]["url-filter"] == "^[^:]+://+([^:/]+\\.)?alias\\.example[:/]"
+        and rule["trigger"]["load-type"] == ["first-party", "third-party"]
+        for rule in tracking_rules
+    )
+    assert any(
+        rule["trigger"]["url-filter"] == "^[^:]+://+([^:/]+\\.)?tracker\\.example\\/special"
+        and rule["trigger"].get("if-domain") == ["*example.com"]
+        and rule["trigger"].get("resource-type") == ["script"]
+        and rule["action"]["type"] == "block"
+        for rule in tracking_rules
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tds_path = Path(tmp) / "macos-tds.json"
+        tds_data = json.dumps(tds_fixture, sort_keys=True).encode("utf-8")
+        tds_path.write_bytes(tds_data)
+        loaded_tracking = load_tracking_rules(
+            cache_dir=Path(tmp),
+            refresh=False,
+            offline=True,
+            tracking_tds_url=DDG_TDS_SOURCE_URL,
+            tracking_tds_file=tds_path,
+            tracking_webkit_json=None,
+            tracking_source_name=None,
+            tracking_source_url=None,
+            tracking_source_license=None,
+        )
+        assert loaded_tracking.source["sourceName"] == DDG_TDS_SOURCE_NAME
+        assert loaded_tracking.source["sourceLicense"] == DDG_TDS_SOURCE_LICENSE
+        assert loaded_tracking.source["sourceLicenseURL"] == DDG_TDS_SOURCE_LICENSE_URL
+        assert loaded_tracking.source["sourceSha256"] == sha256_hex(tds_data)
+        assert loaded_tracking.diagnostics["trackerCount"] == 2
+        assert loaded_tracking.diagnostics["cnameCount"] == 1
 
     with tempfile.TemporaryDirectory() as tmp:
         bundle = Path(tmp) / "SumiAdblockBundle"
@@ -955,10 +1855,38 @@ def self_test() -> None:
             "nativeCSSSafetyPolicyVersion": SAFETY_POLICY_VERSION,
             "generatedDate": "2026-05-17T00:00:00Z",
             "lists": [],
+            "profileLevelMapping": PROTECTION_LEVEL_GROUPS,
+            "groups": [
+                {
+                    "id": TRACKING_NETWORK_GROUP_ID,
+                    "displayName": "Tracking network",
+                    "status": "placeholder",
+                    "activeLevels": ["protection", "adblock"],
+                    "ruleCount": 0,
+                    "shardCount": 0,
+                    "assetRelativePaths": [],
+                    "source": {"type": "placeholder"},
+                    "deduplication": {},
+                    "notes": [],
+                },
+                {
+                    "id": ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID,
+                    "displayName": "Adblock ads and privacy network",
+                    "status": "generated",
+                    "activeLevels": ["adblock"],
+                    "ruleCount": 1,
+                    "shardCount": 1,
+                    "assetRelativePaths": ["network/network-0001.json"],
+                    "source": {"type": "test"},
+                    "deduplication": {},
+                    "notes": [],
+                },
+            ],
             "shards": [
                 {
                     "kind": "network",
-                    "group": "network",
+                    "group": ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID,
+                    "logicalGroup": ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID,
                     "relativePath": "network/network-0001.json",
                     "hash": sha256_hex(data),
                     "byteSize": len(data),
@@ -970,6 +1898,14 @@ def self_test() -> None:
                 "inputRuleCount": 1,
                 "finalRuleCount": 1,
                 "finalShardCount": 1,
+                "ruleCountsByGroup": {
+                    TRACKING_NETWORK_GROUP_ID: 0,
+                    ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID: 1,
+                },
+                "shardCountsByGroup": {
+                    TRACKING_NETWORK_GROUP_ID: 0,
+                    ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID: 1,
+                },
                 "networkRuleCount": 1,
                 "nativeCSSRuleCount": 0,
                 "unsafeCSSFilteredCount": 0,
@@ -1004,6 +1940,22 @@ def make_parser() -> argparse.ArgumentParser:
     build.add_argument("--refresh", action="store_true")
     build.add_argument("--offline", action="store_true")
     build.add_argument("--list-file", action="append", default=[])
+    build.add_argument(
+        "--tracking-tds-url",
+        default=DDG_TDS_SOURCE_URL,
+        help="DuckDuckGo TDS JSON URL used to generate trackingNetwork.",
+    )
+    build.add_argument(
+        "--tracking-tds-file",
+        help="Local DDG TDS JSON fixture/input used instead of fetching --tracking-tds-url.",
+    )
+    build.add_argument(
+        "--tracking-webkit-json",
+        help="Prepared WebKit JSON array override for trackingNetwork. Prefer DDG TDS generation for release builds.",
+    )
+    build.add_argument("--tracking-source-name")
+    build.add_argument("--tracking-source-url")
+    build.add_argument("--tracking-source-license")
     build.add_argument("--max-rules-per-shard", type=int, default=DEFAULT_MAX_RULES_PER_SHARD)
     build.add_argument("--max-bytes-per-shard", type=int, default=DEFAULT_MAX_BYTES_PER_SHARD)
     build.set_defaults(func=build_bundle)

@@ -20,6 +20,23 @@ MINIMUM_SUMI_BUNDLE_EXPECTATION_VERSION = 1
 MAXIMUM_SUMI_BUNDLE_EXPECTATION_VERSION = 1
 BUNDLE_MANIFEST_SCHEMA_VERSION = 1
 REQUIRED_NATIVE_CSS_SAFETY_POLICY_VERSION = "sumi-native-css-safety/0.4"
+TRACKING_NETWORK_GROUP_ID = "trackingNetwork"
+ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID = "adblockAdsPrivacyNetwork"
+DDG_TDS_SOURCE_NAME = "DuckDuckGo Tracker Radar / TDS"
+DDG_TDS_SOURCE_URL = "https://staticcdn.duckduckgo.com/trackerblocking/v6/current/macos-tds.json"
+DDG_TDS_SOURCE_LICENSE = "CC BY-NC-SA 4.0"
+DDG_TDS_SOURCE_LICENSE_URL = "https://creativecommons.org/licenses/by-nc-sa/4.0/"
+REQUIRED_TRACKING_SOURCE_FIELDS = [
+    "sourceName",
+    "sourceURL",
+    "sourceLicense",
+    "sourceLicenseURL",
+    "attribution",
+    "generatedAt",
+    "sourceSha256",
+    "ruleCount",
+    "shardCount",
+]
 
 
 def sha256_hex(data: bytes) -> str:
@@ -35,6 +52,33 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def validate_tracking_group_metadata(group: dict[str, Any], context: str) -> None:
+    source = group.get("source")
+    if not isinstance(source, dict):
+        raise SystemExit(f"{context} trackingNetwork group is missing source metadata")
+    missing = [field for field in REQUIRED_TRACKING_SOURCE_FIELDS if field not in source]
+    if missing:
+        raise SystemExit(f"{context} trackingNetwork source metadata missing: {', '.join(missing)}")
+    if source.get("sourceName") != DDG_TDS_SOURCE_NAME:
+        raise SystemExit(f"{context} trackingNetwork sourceName is not DDG TDS")
+    if source.get("sourceURL") != DDG_TDS_SOURCE_URL:
+        raise SystemExit(f"{context} trackingNetwork sourceURL is not the approved DDG TDS URL")
+    if source.get("sourceLicense") != DDG_TDS_SOURCE_LICENSE:
+        raise SystemExit(f"{context} trackingNetwork sourceLicense must be {DDG_TDS_SOURCE_LICENSE}")
+    if source.get("sourceLicenseURL") != DDG_TDS_SOURCE_LICENSE_URL:
+        raise SystemExit(f"{context} trackingNetwork sourceLicenseURL is not CC BY-NC-SA 4.0")
+    if source.get("nonCommercialOnly") is not True:
+        raise SystemExit(f"{context} trackingNetwork must declare nonCommercialOnly=true")
+    if source.get("shareAlike") is not True:
+        raise SystemExit(f"{context} trackingNetwork must declare shareAlike=true")
+    if group.get("ruleCount", 0) <= 0 or group.get("shardCount", 0) <= 0:
+        raise SystemExit(f"{context} trackingNetwork must contain generated rules and shards")
+    if source.get("ruleCount") != group.get("ruleCount"):
+        raise SystemExit(f"{context} trackingNetwork source ruleCount does not match group ruleCount")
+    if source.get("shardCount") != group.get("shardCount"):
+        raise SystemExit(f"{context} trackingNetwork source shardCount does not match group shardCount")
 
 
 def write_checksums(release_assets_dir: Path) -> None:
@@ -65,6 +109,16 @@ def validate_bundle(bundle_dir: Path) -> dict[str, Any]:
         )
     if not manifest.get("profileId") or not manifest.get("bundleId") or not manifest.get("generationId"):
         raise SystemExit(f"Bundle manifest identity is incomplete: {manifest_path}")
+    groups = manifest.get("groups")
+    if not isinstance(groups, list) or not groups:
+        raise SystemExit(f"Bundle manifest is missing logical groups: {manifest_path}")
+    group_ids = {group.get("id") for group in groups if isinstance(group, dict)}
+    for required_group in [TRACKING_NETWORK_GROUP_ID, ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID]:
+        if required_group not in group_ids:
+            raise SystemExit(f"Bundle manifest missing logical group {required_group}: {manifest_path}")
+    for group in groups:
+        if isinstance(group, dict) and group.get("id") == TRACKING_NETWORK_GROUP_ID:
+            validate_tracking_group_metadata(group, f"Bundle manifest {manifest_path}")
     if not manifest.get("shards"):
         raise SystemExit(f"Bundle contains no shards: {manifest_path}")
     for shard in manifest["shards"]:
@@ -93,11 +147,13 @@ def flattened_asset_name(profile_id: str, relative_path: str) -> str:
     return f"{profile_id}-{Path(relative_path).name}"
 
 
-def asset_role(relative_path: str, shard_kind: str | None = None) -> str:
+def asset_role(relative_path: str, shard_kind: str | None = None, group_id: str | None = None) -> str:
     if relative_path == "manifest.json":
         return "bundleManifest"
     if relative_path == "diagnostics.json":
         return "diagnostics"
+    if group_id == TRACKING_NETWORK_GROUP_ID:
+        return "trackingNetworkShard"
     if shard_kind == "nativeCSS":
         return "nativeCSSShard"
     return "networkShard"
@@ -109,6 +165,7 @@ def copy_payload_asset(
     profile_id: str,
     relative_path: str,
     role: str,
+    group_id: str | None = None,
 ) -> dict[str, Any]:
     data = source.read_bytes()
     name = flattened_asset_name(profile_id, relative_path)
@@ -118,6 +175,7 @@ def copy_payload_asset(
         "name": name,
         "role": role,
         "bundleProfileId": profile_id,
+        "groupId": group_id,
         "relativePath": relative_path,
         "byteSize": len(data),
         "sha256": sha256_hex(data),
@@ -145,6 +203,11 @@ def prepare(args: argparse.Namespace) -> None:
         manifest = validate_bundle(bundle_dir)
         profile_id = manifest["profileId"]
         bundle_asset_names: list[str] = []
+        group_asset_names: dict[str, list[str]] = {
+            group["id"]: []
+            for group in manifest.get("groups", [])
+            if isinstance(group, dict) and isinstance(group.get("id"), str)
+        }
         for relative_path, role, source in [
             ("manifest.json", "bundleManifest", bundle_dir / "manifest.json"),
             ("diagnostics.json", "diagnostics", bundle_dir / "diagnostics.json"),
@@ -156,16 +219,42 @@ def prepare(args: argparse.Namespace) -> None:
 
         for shard in sorted(manifest["shards"], key=lambda item: item["relativePath"]):
             relative_path = shard["relativePath"]
+            group_id = shard.get("logicalGroup") or shard.get("group")
             entry = copy_payload_asset(
                 bundle_dir / relative_path,
                 release_assets_dir,
                 profile_id,
                 relative_path,
-                asset_role(relative_path, shard.get("kind")),
+                asset_role(relative_path, shard.get("kind"), group_id),
+                group_id,
             )
             asset_entries.append(entry)
             bundle_asset_names.append(entry["name"])
+            if isinstance(group_id, str):
+                group_asset_names.setdefault(group_id, []).append(entry["name"])
             payload_hash_inputs.append(f"{entry['name']}:{entry['sha256']}")
+
+        bundle_groups = []
+        for group in manifest.get("groups", []):
+            if not isinstance(group, dict):
+                continue
+            group_id = group.get("id")
+            if not isinstance(group_id, str):
+                continue
+            bundle_groups.append(
+                {
+                    "id": group_id,
+                    "status": group.get("status"),
+                    "activeLevels": group.get("activeLevels", []),
+                    "ruleCount": group.get("ruleCount", 0),
+                    "shardCount": group.get("shardCount", 0),
+                    "assetNames": sorted(group_asset_names.get(group_id, [])),
+                    "assetRelativePaths": group.get("assetRelativePaths", []),
+                    "source": group.get("source", {}),
+                    "deduplication": group.get("deduplication", {}),
+                    "notes": group.get("notes", []),
+                }
+            )
 
         bundle_entries.append(
             {
@@ -173,6 +262,11 @@ def prepare(args: argparse.Namespace) -> None:
                 "bundleId": manifest["bundleId"],
                 "generationId": manifest["generationId"],
                 "generatedDate": manifest["generatedDate"],
+                "profileLevelMapping": manifest.get("profileLevelMapping", {}),
+                "groups": sorted(bundle_groups, key=lambda item: item["id"]),
+                "ruleCountsByGroup": manifest.get("diagnosticsSummary", {}).get("ruleCountsByGroup", {}),
+                "shardCountsByGroup": manifest.get("diagnosticsSummary", {}).get("shardCountsByGroup", {}),
+                "overlapDiagnostics": read_json(bundle_dir / "diagnostics.json").get("crossGroupOverlap", {}),
                 "assetNames": sorted(bundle_asset_names),
             }
         )
@@ -207,6 +301,10 @@ def prepare(args: argparse.Namespace) -> None:
         "",
         "Prepared WebKit content-blocking bundles generated outside Sumi.",
         "",
+        "Logical groups:",
+        "- `trackingNetwork`: generated from DuckDuckGo Tracker Radar / TDS and distributed as CC BY-NC-SA 4.0 derived tracking data for non-commercial Sumi bundles.",
+        "- `adblockAdsPrivacyNetwork`",
+        "",
         "Assets:",
     ]
     for bundle in release_manifest["bundles"]:
@@ -235,6 +333,24 @@ def validate(args: argparse.Namespace) -> None:
         missing = sorted(set(bundle.get("assetNames", [])) - asset_names)
         if missing:
             raise SystemExit(f"Bundle {bundle.get('profileId')} references missing assets: {missing}")
+        groups = bundle.get("groups", [])
+        if not isinstance(groups, list) or not groups:
+            raise SystemExit(f"Bundle {bundle.get('profileId')} has no logical groups")
+        group_ids = {group.get("id") for group in groups if isinstance(group, dict)}
+        for required_group in [TRACKING_NETWORK_GROUP_ID, ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID]:
+            if required_group not in group_ids:
+                raise SystemExit(f"Bundle {bundle.get('profileId')} missing group {required_group}")
+        for group in groups:
+            if group.get("id") == TRACKING_NETWORK_GROUP_ID:
+                validate_tracking_group_metadata(
+                    group,
+                    f"Release manifest bundle {bundle.get('profileId')}",
+                )
+            group_missing = sorted(set(group.get("assetNames", [])) - asset_names)
+            if group_missing:
+                raise SystemExit(
+                    f"Bundle {bundle.get('profileId')} group {group.get('id')} references missing assets: {group_missing}"
+                )
     for asset in manifest.get("assets", []):
         path = release_assets_dir / asset["name"]
         if not path.exists():

@@ -4,7 +4,7 @@ This repository builds Sumi's prepared WebKit content-blocking bundles outside t
 
 ## Pipeline
 
-- `scripts/sumi_adblock_bundle.py` fetches the source lists described in `metadata/source-lists.json`.
+- `scripts/sumi_adblock_bundle.py` fetches DuckDuckGo Tracker Radar / TDS for `trackingNetwork` and the source lists described in `metadata/source-lists.json` for `adblockAdsPrivacyNetwork`.
 - `Vendor/Brave/AdblockRustAdapter` converts raw rules to WebKit content-blocker JSON in CI.
 - The generator emits `SumiAdblockBundle/manifest.json`, `diagnostics.json`, and prepared shard JSON files.
 - `scripts/prepare_release_payload.py` validates bundles, flattens bundle files into release assets, and creates the browser-facing release manifest.
@@ -31,7 +31,17 @@ The release manifest schema is versioned in `metadata/release-format.json`. It i
 - required prepared bundle manifest schema
 - required native CSS safety policy
 - bundle id, generation id, profile id
+- logical groups, profile-level mapping, rule counts, shard counts, source metadata, and overlap diagnostics
 - every asset name, role, target relative path, byte size, and SHA-256 hash
+
+Logical groups:
+
+- `trackingNetwork`: generated from DuckDuckGo Tracker Radar / TDS (`https://staticcdn.duckduckgo.com/trackerblocking/v6/current/macos-tds.json`) into prepared WebKit content-blocker JSON shards. The generator follows TrackerRadarKit's content-blocker rule-building semantics closely enough for prepared-bundle validation, but parity still must be measured before removing Sumi's temporary in-browser DDG fallback code.
+- `adblockAdsPrivacyNetwork`: generated from the configured AdGuard ads/privacy source lists through the CI-side adblock-rust adapter.
+
+DuckDuckGo Tracker Radar / TDS data is licensed under **CC BY-NC-SA 4.0**. Generated `trackingNetwork` assets are derived data and retain the non-commercial and share-alike constraints. Release and bundle manifests carry `sourceName`, `sourceURL`, `sourceLicense`, `sourceLicenseURL`, `attribution`, `generatedAt`, `sourceSha256`, `ruleCount`, and `shardCount` for `trackingNetwork`.
+
+`NOTICE.md` records the DDG attribution and license notice. Release preparation rejects `trackingNetwork` groups that omit the required DDG source, license, non-commercial, and share-alike metadata.
 
 ## Sumi Consumption Contract
 
@@ -39,8 +49,9 @@ Sumi fetches the latest GitHub Release metadata, downloads `sumi-protection-bund
 
 Activation is still Sumi-owned:
 
-- If Adblock is not the applied protection level, the downloaded bundle is cached only.
-- If Adblock is already applied, Sumi compiles the prepared WebKit shards and commits the new active generation only after validation succeeds.
+- If Off is the applied protection level, the downloaded bundle is cached only.
+- If Protection is already applied, Sumi compiles the prepared `trackingNetwork` shards and commits the new active generation only after validation succeeds.
+- If Adblock is already applied, Sumi compiles the prepared `trackingNetwork` and `adblockAdsPrivacyNetwork` shards and commits the new active generation only after validation succeeds.
 - A failed download, manifest mismatch, hash mismatch, or compile failure leaves the previous active bundle set untouched.
 
 Trust boundary: this repository may perform expensive network, parsing, and native compiler work. The browser may only consume prepared release assets. GitHub TLS and SHA-256 checks are transport/integrity checks; authenticity comes from the signed release manifest, and Sumi must verify that signature before trusting manifest fields.
@@ -91,6 +102,7 @@ The workflow default token permission is `contents: read`; only the release publ
 
 ```sh
 python3 scripts/test_sumi_adblock_bundle.py
+python3 scripts/test_tracking_network_release.py
 python3 scripts/prepare_release_payload.py self-test
 python3 scripts/test_release_manifest_signature.py
 scripts/build_sumi_adblock_bundle.sh --all-profiles --output .build/sumi-adblock-bundles

@@ -44,6 +44,7 @@ jobs:
       - name: Run generator self-tests
         run: |
           python3 scripts/test_sumi_adblock_bundle.py
+          python3 scripts/test_tracking_network_release.py
           python3 scripts/prepare_release_payload.py self-test
           python3 scripts/test_release_manifest_signature.py
 

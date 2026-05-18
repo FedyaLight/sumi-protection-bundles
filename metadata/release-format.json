@@ -5,7 +5,42 @@
   "releaseManifestAssetName": "sumi-protection-bundles-release.json",
   "releaseManifestSchemaVersion": 1,
   "requiredNativeCSSSafetyPolicyVersion": "sumi-native-css-safety/0.4",
+  "logicalGroups": [
+    "trackingNetwork",
+    "adblockAdsPrivacyNetwork"
+  ],
+  "profileLevelMapping": {
+    "off": [],
+    "protection": [
+      "trackingNetwork"
+    ],
+    "adblock": [
+      "trackingNetwork",
+      "adblockAdsPrivacyNetwork"
+    ]
+  },
   "supportedProfiles": [
     "adguardAdsPrivacy"
-  ]
+  ],
+  "requiredTrackingNetworkSourceMetadata": [
+    "sourceName",
+    "sourceURL",
+    "sourceLicense",
+    "sourceLicenseURL",
+    "attribution",
+    "generatedAt",
+    "sourceSha256",
+    "ruleCount",
+    "shardCount"
+  ],
+  "sourceLicenseNotices": {
+    "trackingNetwork": {
+      "sourceName": "DuckDuckGo Tracker Radar / TDS",
+      "sourceURL": "https://staticcdn.duckduckgo.com/trackerblocking/v6/current/macos-tds.json",
+      "sourceLicense": "CC BY-NC-SA 4.0",
+      "sourceLicenseURL": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
+      "nonCommercialOnly": true,
+      "shareAlike": true
+    }
+  }
 }
