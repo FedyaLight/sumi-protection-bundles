@@ -7,6 +7,7 @@ This repository builds Sumi's prepared WebKit content-blocking bundles outside t
 - `scripts/sumi_adblock_bundle.py` fetches DuckDuckGo Tracker Radar / TDS for `trackingNetwork` and the source lists described in `metadata/source-lists.json` for `adblockAdsPrivacyNetwork`.
 - `Vendor/Brave/AdblockRustAdapter` converts raw rules to WebKit content-blocker JSON in CI.
 - The generator emits `SumiAdblockBundle/manifest.json`, `diagnostics.json`, and prepared shard JSON files.
+- Release builds emit network shards only. Native CSS shards are a developer-only validation path and require `--include-native-css`.
 - `scripts/prepare_release_payload.py` validates bundles, flattens bundle files into release assets, and creates the browser-facing release manifest.
 - `.github/workflows/publish-bundles.yml` runs weekly and via manual dispatch, uploads CI artifacts for inspection, then publishes a GitHub Release only after validation succeeds.
 

@@ -18,5 +18,35 @@
     "category": "privacyOverlap",
     "displayName": "AdGuard URL Tracking",
     "url": "https://filters.adtidy.org/windows/filters/17.txt"
+  },
+  "adguard-dns": {
+    "category": "baseAds",
+    "displayName": "AdGuard DNS filter",
+    "url": "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"
+  },
+  "ublock-filters": {
+    "category": "baseAds",
+    "displayName": "uBlock filters - Ads",
+    "url": "https://ublockorigin.github.io/uAssets/filters/filters.txt"
+  },
+  "ublock-badware": {
+    "category": null,
+    "displayName": "uBlock filters - Badware risks",
+    "url": "https://ublockorigin.github.io/uAssets/filters/badware.txt"
+  },
+  "ublock-privacy": {
+    "category": "privacyOverlap",
+    "displayName": "uBlock filters - Privacy",
+    "url": "https://ublockorigin.github.io/uAssets/filters/privacy.txt"
+  },
+  "ublock-unbreak": {
+    "category": null,
+    "displayName": "uBlock filters - Unbreak",
+    "url": "https://ublockorigin.github.io/uAssets/filters/unbreak.txt"
+  },
+  "ublock-quick-fixes": {
+    "category": null,
+    "displayName": "uBlock filters - Quick fixes",
+    "url": "https://ublockorigin.github.io/uAssets/filters/quick-fixes.txt"
   }
 }

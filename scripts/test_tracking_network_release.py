@@ -56,6 +56,7 @@ class TrackingNetworkReleaseTests(unittest.TestCase):
                 tracking_source_license=None,
                 max_rules=2,
                 max_bytes=10_000,
+                include_native_css=False,
             )
             BUNDLE.verify_bundle_dir(bundle_dir, allow_empty_shards=False, quiet=True)
 

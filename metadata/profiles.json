@@ -1,12 +1,15 @@
 {
   "adguardAdsPrivacy": {
     "classification": "Sumi prepared Adblock",
-    "displayName": "AdGuard ads and privacy",
+    "displayName": "Lean AdGuard browser network",
     "listIds": [
+      "adguard-dns",
       "adguard-base",
-      "adguard-mobile-ads",
-      "adguard-tracking-protection",
-      "adguard-url-tracking"
+      "ublock-filters",
+      "ublock-badware",
+      "ublock-privacy",
+      "ublock-unbreak",
+      "ublock-quick-fixes"
     ]
   }
 }

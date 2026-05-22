@@ -97,6 +97,7 @@ const KNOWN_REDIRECT_RESOURCES: &[RedirectResourceMetadata] = &[
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let include_cosmetic = !std::env::args().any(|arg| arg == "--skip-cosmetic");
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
     let rules: Vec<String> = input
@@ -107,23 +108,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
 
     let network = compile_rules(&rules, RuleTypes::NetworkOnly)?;
-    let cosmetic = compile_rules(&rules, RuleTypes::CosmeticOnly)?;
+    let mut used: HashSet<String> = network.1.iter().cloned().collect();
     let mut native_cosmetic_css = Vec::new();
     let mut unexpected_cosmetic_output = Vec::new();
-    for rule in cosmetic.0 {
-        if matches!(rule.action.typ, CbType::CssDisplayNone) {
-            native_cosmetic_css.push(rule);
-        } else {
-            unexpected_cosmetic_output.push(AdapterDiagnostic {
-                rule: "<adblock-rust cosmetic output>".to_string(),
-                reason: format!(
-                    "ignored non-native cosmetic content-blocking action: {:?}",
-                    rule.action.typ
-                ),
-            });
+    if include_cosmetic {
+        let cosmetic = compile_rules(&rules, RuleTypes::CosmeticOnly)?;
+        used.extend(cosmetic.1.iter().cloned());
+        for rule in cosmetic.0 {
+            if matches!(rule.action.typ, CbType::CssDisplayNone) {
+                native_cosmetic_css.push(rule);
+            } else {
+                unexpected_cosmetic_output.push(AdapterDiagnostic {
+                    rule: "<adblock-rust cosmetic output>".to_string(),
+                    reason: format!(
+                        "ignored non-native cosmetic content-blocking action: {:?}",
+                        rule.action.typ
+                    ),
+                });
+            }
         }
     }
-    let used: HashSet<String> = network.1.iter().chain(cosmetic.1.iter()).cloned().collect();
     let mut unsupported_or_ignored = rules
         .iter()
         .filter(|rule| !rule.starts_with('!') && !used.contains(*rule))

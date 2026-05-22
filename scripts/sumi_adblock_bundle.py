@@ -73,17 +73,50 @@ DEFAULT_LISTS: dict[str, dict[str, Any]] = {
         "category": "privacyOverlap",
         "url": "https://filters.adtidy.org/windows/filters/17.txt",
     },
+    "adguard-dns": {
+        "displayName": "AdGuard DNS filter",
+        "category": "baseAds",
+        "url": "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt",
+    },
+    "ublock-filters": {
+        "displayName": "uBlock filters - Ads",
+        "category": "baseAds",
+        "url": "https://ublockorigin.github.io/uAssets/filters/filters.txt",
+    },
+    "ublock-badware": {
+        "displayName": "uBlock filters - Badware risks",
+        "category": None,
+        "url": "https://ublockorigin.github.io/uAssets/filters/badware.txt",
+    },
+    "ublock-privacy": {
+        "displayName": "uBlock filters - Privacy",
+        "category": "privacyOverlap",
+        "url": "https://ublockorigin.github.io/uAssets/filters/privacy.txt",
+    },
+    "ublock-unbreak": {
+        "displayName": "uBlock filters - Unbreak",
+        "category": None,
+        "url": "https://ublockorigin.github.io/uAssets/filters/unbreak.txt",
+    },
+    "ublock-quick-fixes": {
+        "displayName": "uBlock filters - Quick fixes",
+        "category": None,
+        "url": "https://ublockorigin.github.io/uAssets/filters/quick-fixes.txt",
+    },
 }
 
 
 DEFAULT_PROFILES: dict[str, dict[str, Any]] = {
     "adguardAdsPrivacy": {
-        "displayName": "AdGuard ads and privacy",
+        "displayName": "Lean AdGuard browser network",
         "listIds": [
+            "adguard-dns",
             "adguard-base",
-            "adguard-mobile-ads",
-            "adguard-tracking-protection",
-            "adguard-url-tracking",
+            "ublock-filters",
+            "ublock-badware",
+            "ublock-privacy",
+            "ublock-unbreak",
+            "ublock-quick-fixes",
         ],
         "classification": "Sumi prepared Adblock",
     },
@@ -150,6 +183,25 @@ def load_metadata(name: str, fallback: dict[str, dict[str, Any]]) -> dict[str, d
 
 LISTS = load_metadata("source-lists.json", DEFAULT_LISTS)
 PROFILES = load_metadata("profiles.json", DEFAULT_PROFILES)
+SUPPORTED_SUMI_LIST_CATEGORIES = {
+    "baseAds",
+    "nativeCosmeticCompatibleAds",
+    "annoyances",
+    "regional",
+    "privacyOverlap",
+}
+
+
+def validate_list_categories(lists: dict[str, dict[str, Any]]) -> None:
+    for list_id, descriptor in lists.items():
+        category = descriptor.get("category")
+        if category is not None and category not in SUPPORTED_SUMI_LIST_CATEGORIES:
+            raise ValueError(
+                f"List {list_id} category {category!r} is not supported by Sumi bundle manifests"
+            )
+
+
+validate_list_categories(LISTS)
 
 
 def sha256_hex(data: bytes) -> str:
@@ -402,9 +454,17 @@ def build_adapter(root: Path) -> Path:
     return helper
 
 
-def run_adapter(helper: Path, rules: list[str]) -> dict[str, Any]:
+def run_adapter(
+    helper: Path,
+    rules: list[str],
+    *,
+    include_native_css: bool,
+) -> dict[str, Any]:
+    command = [str(helper)]
+    if not include_native_css:
+        command.append("--skip-cosmetic")
     completed = subprocess.run(
-        [str(helper)],
+        command,
         input=("\n".join(rules) + "\n").encode("utf-8"),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -1347,6 +1407,7 @@ def build_bundle(args: argparse.Namespace) -> None:
             tracking_source_license=args.tracking_source_license,
             max_rules=args.max_rules_per_shard,
             max_bytes=args.max_bytes_per_shard,
+            include_native_css=args.include_native_css,
         )
 
 
@@ -1366,6 +1427,7 @@ def build_one_bundle(
     tracking_source_license: str | None,
     max_rules: int,
     max_bytes: int,
+    include_native_css: bool,
 ) -> None:
     profile = PROFILES[profile_id]
     selected_list_ids = profile["listIds"]
@@ -1384,7 +1446,11 @@ def build_one_bundle(
     }
     raw_dedupe = dedupe_raw_lists(list_texts)
     memory["afterRawDedupeResidentBytes"] = current_resident_memory_bytes()
-    adapter_output = run_adapter(helper, raw_dedupe.rules)
+    adapter_output = run_adapter(
+        helper,
+        raw_dedupe.rules,
+        include_native_css=include_native_css,
+    )
     network_input = adapter_output.get("network", [])
     css_input, filtered_css = sanitize_native_css_rules(adapter_output.get("native_cosmetic_css", []))
     memory["beforeNativeJSONDedupeResidentBytes"] = current_resident_memory_bytes()
@@ -1958,6 +2024,11 @@ def make_parser() -> argparse.ArgumentParser:
     build.add_argument("--tracking-source-license")
     build.add_argument("--max-rules-per-shard", type=int, default=DEFAULT_MAX_RULES_PER_SHARD)
     build.add_argument("--max-bytes-per-shard", type=int, default=DEFAULT_MAX_BYTES_PER_SHARD)
+    build.add_argument(
+        "--include-native-css",
+        action="store_true",
+        help="Emit developer-only native CSS shards. Release/browser bundles omit them by default.",
+    )
     build.set_defaults(func=build_bundle)
 
     verify = subparsers.add_parser("verify")
