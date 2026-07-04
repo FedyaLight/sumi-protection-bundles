@@ -22,8 +22,17 @@ from typing import Any
 SCHEMA_VERSION = 1
 SAFETY_POLICY_VERSION = "sumi-native-css-safety/0.4"
 ADAPTER_VERSION = "adblock-rust-adapter/0.1.0 adblock-rust/0.12.5"
-DEFAULT_MAX_RULES_PER_SHARD = 25_000
-DEFAULT_MAX_BYTES_PER_SHARD = 3_000_000
+# WebKit's WKContentRuleListStore compiles a single content rule list up to
+# ~150,000 rules; 175,000 is rejected immediately with WKErrorDomain 6
+# (measured on macOS 15+ WebKit). Every extra shard is another per-request
+# matcher pass in the network process, so we consolidate to as few lists as
+# possible while keeping a comfortable ~50k-rule margin below the hard ceiling.
+# At 100k rules/shard the ~182k-rule adblock network group fits in 2 lists
+# instead of 8, cutting the per-request content-rule-list count from 9 to 3.
+# The byte cap is raised in step so the rule cap is the binding constraint
+# (a 100k-rule network shard is ~11 MB of compact WebKit CbRule JSON).
+DEFAULT_MAX_RULES_PER_SHARD = 100_000
+DEFAULT_MAX_BYTES_PER_SHARD = 14_000_000
 TRACKING_NETWORK_GROUP_ID = "trackingNetwork"
 ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID = "adblockAdsPrivacyNetwork"
 PROTECTION_LEVEL_GROUPS: dict[str, list[str]] = {
