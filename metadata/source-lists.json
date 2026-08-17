@@ -1,52 +1,42 @@
 {
-  "adguard-base": {
+  "adguard-base-safari": {
     "category": "baseAds",
-    "displayName": "AdGuard Base",
-    "url": "https://filters.adtidy.org/extension/chromium/filters/2.txt"
+    "displayName": "AdGuard Base Filter",
+    "url": "https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/platforms/extension/safari/filters/2_optimized.txt"
   },
-  "adguard-mobile-ads": {
-    "category": "baseAds",
-    "displayName": "AdGuard Mobile Ads",
-    "url": "https://filters.adtidy.org/extension/chromium/filters/11.txt"
-  },
-  "adguard-tracking-protection": {
+  "adguard-tracking-safari": {
     "category": "privacyOverlap",
-    "displayName": "AdGuard Tracking Protection",
-    "url": "https://filters.adtidy.org/extension/chromium/filters/3.txt"
+    "displayName": "AdGuard Tracking Protection Filter",
+    "url": "https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/platforms/extension/safari/filters/3_optimized.txt"
   },
   "adguard-url-tracking": {
     "category": "privacyOverlap",
-    "displayName": "AdGuard URL Tracking",
-    "url": "https://filters.adtidy.org/windows/filters/17.txt"
+    "displayName": "AdGuard URL Tracking Protection Filter",
+    "url": "https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/filters/filter_17_TrackParam/filter.txt"
   },
-  "adguard-dns": {
-    "category": "baseAds",
-    "displayName": "AdGuard DNS filter",
-    "url": "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"
-  },
-  "ublock-filters": {
-    "category": "baseAds",
-    "displayName": "uBlock filters - Ads",
-    "url": "https://ublockorigin.github.io/uAssets/filters/filters.txt"
-  },
-  "ublock-badware": {
-    "category": null,
-    "displayName": "uBlock filters - Badware risks",
-    "url": "https://ublockorigin.github.io/uAssets/filters/badware.txt"
-  },
-  "ublock-privacy": {
+  "actually-legitimate-url-shortener": {
     "category": "privacyOverlap",
-    "displayName": "uBlock filters - Privacy",
-    "url": "https://ublockorigin.github.io/uAssets/filters/privacy.txt"
+    "displayName": "Actually Legitimate URL Shortener Tool",
+    "url": "https://raw.githubusercontent.com/DandelionSprout/adfilt/master/LegitimateURLShortener.txt"
   },
-  "ublock-unbreak": {
-    "category": null,
-    "displayName": "uBlock filters - Unbreak",
-    "url": "https://ublockorigin.github.io/uAssets/filters/unbreak.txt"
+  "easyprivacy-safari": {
+    "category": "privacyOverlap",
+    "displayName": "EasyPrivacy",
+    "url": "https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/platforms/extension/safari/filters/118_optimized.txt"
   },
-  "ublock-quick-fixes": {
-    "category": null,
-    "displayName": "uBlock filters - Quick fixes",
-    "url": "https://ublockorigin.github.io/uAssets/filters/quick-fixes.txt"
+  "online-malicious-url-safari": {
+    "category": "baseAds",
+    "displayName": "Online Security Filter",
+    "url": "https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/platforms/extension/safari/filters/208_optimized.txt"
+  },
+  "peter-lowe-safari": {
+    "category": "baseAds",
+    "displayName": "Peter Lowe's Blocklist",
+    "url": "https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/platforms/extension/safari/filters/204_optimized.txt"
+  },
+  "adblock-warning-removal-safari": {
+    "category": "annoyances",
+    "displayName": "Anti-Adblock List",
+    "url": "https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/platforms/extension/safari/filters/207_optimized.txt"
   }
 }

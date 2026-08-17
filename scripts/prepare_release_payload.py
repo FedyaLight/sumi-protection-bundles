@@ -92,6 +92,52 @@ def write_checksums(release_assets_dir: Path) -> None:
     )
 
 
+def validate_advanced_blocking(
+    bundle_dir: Path,
+    manifest: dict[str, Any],
+) -> list[dict[str, Any]]:
+    descriptor = manifest.get("advancedBlocking")
+    if not isinstance(descriptor, dict):
+        raise SystemExit(f"Bundle is missing advancedBlocking metadata: {bundle_dir}")
+    if (
+        descriptor.get("format") != "safari-converter-filter-engine"
+        or descriptor.get("schemaVersion") != 1
+        or descriptor.get("runtimeVersion") != "4.3.0"
+        or descriptor.get("ruleCount", 0) <= 0
+    ):
+        raise SystemExit(f"Bundle advancedBlocking metadata is incompatible: {bundle_dir}")
+    artifacts = descriptor.get("artifacts")
+    if not isinstance(artifacts, list):
+        raise SystemExit(f"Bundle advancedBlocking artifacts are missing: {bundle_dir}")
+    expected = {
+        "ruleStorage": ".webext/rules.bin",
+        "engineIndex": ".webext/engine.bin",
+        "engineMetadata": ".webext/meta.bin",
+        "sourceRules": ".webext/rules.txt",
+        "urlCleaningRules": ".webext/removeparam.json",
+    }
+    by_role = {
+        artifact.get("role"): artifact
+        for artifact in artifacts
+        if isinstance(artifact, dict)
+    }
+    if set(by_role) != set(expected):
+        raise SystemExit(f"Bundle advancedBlocking artifact roles are invalid: {bundle_dir}")
+    for role, relative in expected.items():
+        artifact = by_role[role]
+        if artifact.get("relativePath") != relative:
+            raise SystemExit(f"Bundle advancedBlocking artifact path is invalid: {role}")
+        path = bundle_dir / relative
+        if not path.is_file():
+            raise SystemExit(f"Missing advancedBlocking artifact: {relative}")
+        data = path.read_bytes()
+        if len(data) != artifact.get("byteSize"):
+            raise SystemExit(f"AdvancedBlocking artifact size mismatch: {relative}")
+        if sha256_hex(data) != artifact.get("hash"):
+            raise SystemExit(f"AdvancedBlocking artifact hash mismatch: {relative}")
+    return artifacts
+
+
 def validate_bundle(bundle_dir: Path) -> dict[str, Any]:
     manifest_path = bundle_dir / "manifest.json"
     diagnostics_path = bundle_dir / "diagnostics.json"
@@ -136,6 +182,7 @@ def validate_bundle(bundle_dir: Path) -> dict[str, Any]:
         parsed = json.loads(data.decode("utf-8"))
         if not isinstance(parsed, list) or not parsed:
             raise SystemExit(f"Shard must be a non-empty JSON array: {relative}")
+    validate_advanced_blocking(bundle_dir, manifest)
     return manifest
 
 
@@ -156,6 +203,15 @@ def asset_role(relative_path: str, shard_kind: str | None = None, group_id: str 
         return "trackingNetworkShard"
     if shard_kind == "nativeCSS":
         return "nativeCSSShard"
+    advanced_roles = {
+        ".webext/rules.bin": "advancedRuleStorage",
+        ".webext/engine.bin": "advancedEngineIndex",
+        ".webext/meta.bin": "advancedEngineMetadata",
+        ".webext/rules.txt": "advancedSourceRules",
+        ".webext/removeparam.json": "advancedURLCleaningRules",
+    }
+    if relative_path in advanced_roles:
+        return advanced_roles[relative_path]
     return "networkShard"
 
 
@@ -234,6 +290,22 @@ def prepare(args: argparse.Namespace) -> None:
                 group_asset_names.setdefault(group_id, []).append(entry["name"])
             payload_hash_inputs.append(f"{entry['name']}:{entry['sha256']}")
 
+        for artifact in sorted(
+            manifest["advancedBlocking"]["artifacts"],
+            key=lambda item: item["relativePath"],
+        ):
+            relative_path = artifact["relativePath"]
+            entry = copy_payload_asset(
+                bundle_dir / relative_path,
+                release_assets_dir,
+                profile_id,
+                relative_path,
+                asset_role(relative_path),
+            )
+            asset_entries.append(entry)
+            bundle_asset_names.append(entry["name"])
+            payload_hash_inputs.append(f"{entry['name']}:{entry['sha256']}")
+
         bundle_groups = []
         for group in manifest.get("groups", []):
             if not isinstance(group, dict):
@@ -303,7 +375,7 @@ def prepare(args: argparse.Namespace) -> None:
         "",
         "Logical groups:",
         "- `trackingNetwork`: generated from DuckDuckGo Tracker Radar / TDS and distributed as CC BY-NC-SA 4.0 derived tracking data for non-commercial Sumi bundles.",
-        "- `adblockAdsPrivacyNetwork`",
+        "- `adblockAdsPrivacyNetwork`: wBlock-default Safari JSON plus a matching SafariConverterLib FilterEngine generation.",
         "",
         "Assets:",
     ]

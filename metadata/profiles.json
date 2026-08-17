@@ -1,15 +1,34 @@
 {
-  "adguardAdsPrivacy": {
-    "classification": "Sumi prepared Adblock",
-    "displayName": "Lean AdGuard browser network",
+  "wblockDefault": {
+    "classification": "wBlock macOS default parity (Safari 16.4-18)",
+    "displayName": "wBlock Default (Safari 16.4-18)",
     "listIds": [
-      "adguard-dns",
-      "adguard-base",
-      "ublock-filters",
-      "ublock-badware",
-      "ublock-privacy",
-      "ublock-unbreak",
-      "ublock-quick-fixes"
-    ]
+      "adguard-base-safari",
+      "adguard-tracking-safari",
+      "adguard-url-tracking",
+      "actually-legitimate-url-shortener",
+      "easyprivacy-safari",
+      "online-malicious-url-safari",
+      "peter-lowe-safari",
+      "adblock-warning-removal-safari"
+    ],
+    "safariVersion": "18",
+    "wBlockRevision": "15f65096ccb5a36fdea6883b526037884cb9a60a"
+  },
+  "wblockDefaultSafari26": {
+    "classification": "wBlock macOS default parity (Safari 26+)",
+    "displayName": "wBlock Default (Safari 26+)",
+    "listIds": [
+      "adguard-base-safari",
+      "adguard-tracking-safari",
+      "adguard-url-tracking",
+      "actually-legitimate-url-shortener",
+      "easyprivacy-safari",
+      "online-malicious-url-safari",
+      "peter-lowe-safari",
+      "adblock-warning-removal-safari"
+    ],
+    "safariVersion": "26",
+    "wBlockRevision": "15f65096ccb5a36fdea6883b526037884cb9a60a"
   }
 }

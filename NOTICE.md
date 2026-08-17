@@ -1,5 +1,15 @@
 # Notices
 
+## wBlock and SafariConverterLib
+
+The five-slot affinity distribution and `$removeparam` DNR behavior are based
+on wBlock revision `15f65096ccb5a36fdea6883b526037884cb9a60a`, GPL-3.0.
+Native and advanced rules are generated with SafariConverterLib 4.3.0 revision
+`7a2e93f0afa70479cc59985f332025236c3f0c39`, GPL-3.0.
+
+The generated bundle also contains data derived from the filter lists declared
+in `metadata/source-lists.json`; each list retains its upstream license.
+
 ## DuckDuckGo Tracker Radar / TDS
 
 `trackingNetwork` is generated from DuckDuckGo Tracker Radar / Tracker Data Set:

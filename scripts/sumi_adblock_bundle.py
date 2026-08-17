@@ -38,7 +38,7 @@ ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID = "adblockAdsPrivacyNetwork"
 PROTECTION_LEVEL_GROUPS: dict[str, list[str]] = {
     "off": [],
     "protection": [TRACKING_NETWORK_GROUP_ID],
-    "adblock": [TRACKING_NETWORK_GROUP_ID, ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID],
+    "adblock": [ADBLOCK_ADS_PRIVACY_NETWORK_GROUP_ID],
 }
 DDG_TDS_SOURCE_NAME = "DuckDuckGo Tracker Radar / TDS"
 DDG_TDS_SOURCE_URL = "https://staticcdn.duckduckgo.com/trackerblocking/v6/current/macos-tds.json"

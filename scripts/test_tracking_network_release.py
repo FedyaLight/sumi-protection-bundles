@@ -38,16 +38,17 @@ class TrackingNetworkReleaseTests(unittest.TestCase):
             tds_file = root / "macos-tds.json"
             tds_file.write_text(json.dumps(self.tds_fixture(), sort_keys=True), encoding="utf-8")
 
-            bundle_dir = root / "bundles" / "adguardAdsPrivacy" / "SumiAdblockBundle"
+            profile_id = next(iter(BUNDLE.PROFILES))
+            bundle_dir = root / "bundles" / profile_id / "SumiAdblockBundle"
             bundle_dir.mkdir(parents=True)
             BUNDLE.build_one_bundle(
-                profile_id="adguardAdsPrivacy",
+                profile_id=profile_id,
                 bundle_dir=bundle_dir,
                 cache_dir=root / "cache",
                 helper=adapter,
                 refresh=False,
                 offline=True,
-                overrides={list_id: list_file for list_id in BUNDLE.PROFILES["adguardAdsPrivacy"]["listIds"]},
+                overrides={list_id: list_file for list_id in BUNDLE.PROFILES[profile_id]["listIds"]},
                 tracking_tds_url=BUNDLE.DDG_TDS_SOURCE_URL,
                 tracking_tds_file=tds_file,
                 tracking_webkit_json=None,
@@ -58,6 +59,7 @@ class TrackingNetworkReleaseTests(unittest.TestCase):
                 max_bytes=10_000,
                 include_native_css=False,
             )
+            self.add_advanced_fixture(bundle_dir)
             BUNDLE.verify_bundle_dir(bundle_dir, allow_empty_shards=False, quiet=True)
 
             manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -106,17 +108,51 @@ class TrackingNetworkReleaseTests(unittest.TestCase):
             )
             self.sign_and_verify_release_manifest(release_output / "release-assets")
 
+    def add_advanced_fixture(self, bundle_dir: Path) -> None:
+        values = [
+            ("ruleStorage", ".webext/rules.bin"),
+            ("engineIndex", ".webext/engine.bin"),
+            ("engineMetadata", ".webext/meta.bin"),
+            ("sourceRules", ".webext/rules.txt"),
+            ("urlCleaningRules", ".webext/removeparam.json"),
+        ]
+        artifacts = []
+        for role, relative_path in values:
+            path = bundle_dir / relative_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data = role.encode("utf-8")
+            path.write_bytes(data)
+            artifacts.append(
+                {
+                    "role": role,
+                    "relativePath": relative_path,
+                    "hash": BUNDLE.sha256_hex(data),
+                    "byteSize": len(data),
+                }
+            )
+        manifest_path = bundle_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["advancedBlocking"] = {
+            "format": "safari-converter-filter-engine",
+            "schemaVersion": 1,
+            "runtimeVersion": "4.3.0",
+            "ruleCount": 1,
+            "artifacts": artifacts,
+        }
+        BUNDLE.write_json(manifest_path, manifest)
+
     def sign_and_verify_release_manifest(self, release_assets: Path) -> None:
         private_key = release_assets.parent / "test-ed25519.private.pem"
         public_key = release_assets.parent / "test-ed25519.public.pem"
+        openssl = os.environ.get("OPENSSL", "openssl")
         subprocess.run(
-            ["openssl", "genpkey", "-algorithm", "Ed25519", "-out", str(private_key)],
+            [openssl, "genpkey", "-algorithm", "Ed25519", "-out", str(private_key)],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
         subprocess.run(
-            ["openssl", "pkey", "-in", str(private_key), "-pubout", "-out", str(public_key)],
+            [openssl, "pkey", "-in", str(private_key), "-pubout", "-out", str(public_key)],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
